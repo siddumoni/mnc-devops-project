@@ -1,0 +1,76 @@
+# ─────────────────────────────────────────────
+# Ingress — routes external traffic from the ALB
+# to frontend and backend services.
+#
+# Requires: AWS Load Balancer Controller installed on EKS.
+# Install it via Helm (see scripts/install-alb-controller.sh)
+#
+# Traffic flow:
+#   Internet → AWS ALB → Ingress → Service → Pod
+#
+# Path rules:
+#   /api/*  → backend-service (Spring Boot)
+#   /*      → frontend-service (React + Nginx)
+# ─────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: app-ingress
+  namespace: dev
+  labels:
+    app: mnc-app
+    environment: dev
+  annotations:
+    # Tells EKS to create an AWS ALB (not an nginx ingress)
+    kubernetes.io/ingress.class: alb
+
+    # ALB is internet-facing (public subnets)
+    alb.ingress.kubernetes.io/scheme: internet-facing
+
+    # Use IP mode — routes directly to pod IPs (more efficient)
+    alb.ingress.kubernetes.io/target-type: ip
+
+    # Health check for the ALB target group
+    alb.ingress.kubernetes.io/healthcheck-path: /actuator/health
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "30"
+    alb.ingress.kubernetes.io/healthy-threshold-count: "2"
+    alb.ingress.kubernetes.io/unhealthy-threshold-count: "3"
+
+    # Port to listen on
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+
+    # In production, add HTTPS:
+    # alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS": 443}]'
+    # alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:...
+
+    # Tags applied to the ALB in AWS console (for cost tracking)
+    alb.ingress.kubernetes.io/tags: "Environment=dev,Project=mnc-app,ManagedBy=kubernetes"
+
+spec:
+  rules:
+    - http:
+        paths:
+          # API traffic → backend
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: backend-service
+                port:
+                  number: 80
+          # Actuator health endpoints → backend (for ALB health checks)
+          - path: /actuator
+            pathType: Prefix
+            backend:
+              service:
+                name: backend-service
+                port:
+                  number: 80
+          # Everything else → frontend
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend-service
+                port:
+                  number: 80

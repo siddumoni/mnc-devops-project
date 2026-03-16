@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: prod
+  labels:
+    app: mnc-app
+    environment: prod
+data:
+  DB_HOST: "mnc-app-prod-mysql.xxxxxxxxxx.ap-south-1.rds.amazonaws.com"
+  DB_NAME: "mnc_app_prod"
+  DB_USERNAME: "appuser"
+  SPRING_PROFILES_ACTIVE: "prod"
+  DEPLOY_ENV: "prod"
+  LOG_LEVEL: "WARN"                # Prod: only warnings and errors (less noise, cheaper CloudWatch)
+  JAVA_OPTS: "-Xmx1024m -Xms768m" # More heap for prod traffic

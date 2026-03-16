@@ -1,0 +1,545 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// JENKINSFILE — MNC Production CI/CD Pipeline
+//
+// Branch → Environment mapping (MNC standard):
+//   feature/*  → builds and tests only (no deploy)
+//   develop    → auto-deploy to DEV namespace
+//   release/*  → build + test + manual approval → deploy to STAGING
+//   main       → build + test + dual approval  → deploy to PROD
+//
+// Key principles:
+//   1. The Docker image is built ONCE and the same image is promoted across envs.
+//      Never rebuild for staging or prod — what you tested is what you deploy.
+//   2. Images are tagged with git commit SHA — perfect traceability.
+//   3. SonarQube quality gate BLOCKS the pipeline if it fails.
+//   4. Prod deploy requires TWO different people to approve (segregation of duties).
+// ─────────────────────────────────────────────────────────────────────────────
+
+pipeline {
+    agent any
+
+    // ── Tool versions (configured in Jenkins → Global Tool Configuration) ──
+    tools {
+        maven 'Maven-3.9'
+        jdk   'Java-17'
+    }
+
+    // ── Pipeline-level environment variables ──────────────────────────────
+    environment {
+        // Project identifiers
+        PROJECT_NAME    = 'mnc-app'
+        AWS_REGION      = 'ap-south-1'
+
+        // Read AWS account ID from SSM (set by Terraform)
+        AWS_ACCOUNT_ID  = sh(
+            script: "aws sts get-caller-identity --query Account --output text",
+            returnStdout: true
+        ).trim()
+
+        // ECR registry URL constructed from account + region
+        ECR_REGISTRY    = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+        FRONTEND_REPO   = "${ECR_REGISTRY}/${PROJECT_NAME}/frontend"
+        BACKEND_REPO    = "${ECR_REGISTRY}/${PROJECT_NAME}/backend"
+
+        // Git commit SHA — used as the primary image tag
+        // This ties every running container back to an exact commit
+        GIT_COMMIT_SHORT = sh(
+            script: "git rev-parse --short HEAD",
+            returnStdout: true
+        ).trim()
+
+        // SonarQube — configured in Jenkins → Configure System
+        SONAR_PROJECT_KEY = 'mnc-app'
+
+        // Determine target environment from branch name
+        DEPLOY_ENV = sh(
+            script: """
+                case "${BRANCH_NAME}" in
+                    main)        echo 'prod'    ;;
+                    release/*)   echo 'staging' ;;
+                    develop)     echo 'dev'     ;;
+                    *)           echo 'none'    ;;
+                esac
+            """,
+            returnStdout: true
+        ).trim()
+    }
+
+    options {
+        // Keep only last 20 builds — saves Jenkins disk space
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+        // If a build runs longer than 60 minutes, something is wrong — kill it
+        timeout(time: 60, unit: 'MINUTES')
+        // Don't run multiple builds of the same branch simultaneously
+        disableConcurrentBuilds()
+        // Add timestamps to all console output
+        timestamps()
+        // Persist ANSI colors in console log
+        ansiColor('xterm')
+    }
+
+    stages {
+
+        // ── STAGE 1: Checkout ─────────────────────────────────────────────
+        // Jenkins auto-checks out for us (SCM configured on job), but we
+        // print context here so every build log starts with clear metadata.
+        stage('Checkout') {
+            steps {
+                script {
+                    echo "╔══════════════════════════════════════╗"
+                    echo "║  MNC App Pipeline                    ║"
+                    echo "╠══════════════════════════════════════╣"
+                    echo "║  Branch  : ${BRANCH_NAME}"
+                    echo "║  Commit  : ${GIT_COMMIT_SHORT}"
+                    echo "║  Target  : ${DEPLOY_ENV}"
+                    echo "║  Build # : ${BUILD_NUMBER}"
+                    echo "╚══════════════════════════════════════╝"
+                }
+            }
+        }
+
+        // ── STAGE 2: Maven Build + Unit Tests ────────────────────────────
+        // Compiles the Spring Boot app and runs all unit tests.
+        // Stops here if compilation fails or any test fails.
+        stage('Build & Unit Tests') {
+            steps {
+                dir('app/backend') {
+                    sh """
+                        echo "=== Running Maven build ==="
+                        mvn clean install \
+                            -Dmaven.test.failure.ignore=false \
+                            -Dspring.profiles.active=test \
+                            --batch-mode \
+                            --no-transfer-progress
+                    """
+                }
+            }
+            post {
+                always {
+                    // Publish JUnit test results in Jenkins UI
+                    junit(
+                        testResults: 'app/backend/target/surefire-reports/*.xml',
+                        allowEmptyResults: false
+                    )
+                    // Publish code coverage report (if you add JaCoCo plugin)
+                    jacoco(
+                        execPattern: 'app/backend/target/jacoco.exec',
+                        minimumLineCoverage: '70'   // Fail if coverage drops below 70%
+                    )
+                }
+            }
+        }
+
+        // ── STAGE 3: SonarQube Static Analysis ───────────────────────────
+        // Sends the compiled code to SonarQube for analysis.
+        // The "Quality Gate" step WAITS for SonarQube to finish and
+        // fails the build if the gate fails (e.g. too many bugs, low coverage).
+        //
+        // 'SonarQube-Server' must be configured in:
+        //   Jenkins → Manage Jenkins → Configure System → SonarQube servers
+        stage('SonarQube Analysis') {
+            steps {
+                dir('app/backend') {
+                    withSonarQubeEnv('SonarQube-Server') {
+                        sh """
+                            mvn sonar:sonar \
+                                -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
+                                -Dsonar.projectName='MNC App - Backend' \
+                                -Dsonar.java.coveragePlugin=jacoco \
+                                -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml \
+                                --batch-mode \
+                                --no-transfer-progress
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('SonarQube Quality Gate') {
+            steps {
+                // This blocks until SonarQube finishes processing.
+                // abortPipeline: true means a FAILED quality gate KILLS this build.
+                timeout(time: 10, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        // ── STAGE 4: Docker Build & ECR Push ─────────────────────────────
+        // Builds the Docker image and pushes to ECR.
+        // Only runs when we're targeting a real environment.
+        // Tags the image with the git SHA for full traceability.
+        stage('Docker Build & Push to ECR') {
+            when {
+                expression { DEPLOY_ENV != 'none' }
+            }
+            steps {
+                script {
+                    def imageTag = "sha-${GIT_COMMIT_SHORT}"
+
+                    // Authenticate Docker to ECR
+                    // No static credentials — uses EC2 instance role
+                    sh """
+                        aws ecr get-login-password --region ${AWS_REGION} | \
+                        docker login --username AWS --password-stdin ${ECR_REGISTRY}
+                    """
+
+                    // Build and push BACKEND
+                    sh """
+                        echo "=== Building backend image ==="
+                        docker build \
+                            -t ${BACKEND_REPO}:${imageTag} \
+                            -t ${BACKEND_REPO}:${DEPLOY_ENV}-latest \
+                            --build-arg BUILD_DATE=\$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+                            --build-arg GIT_COMMIT=${GIT_COMMIT_SHORT} \
+                            --build-arg VERSION=${imageTag} \
+                            -f app/backend/Dockerfile \
+                            app/backend/
+
+                        echo "=== Pushing backend to ECR ==="
+                        docker push ${BACKEND_REPO}:${imageTag}
+                        docker push ${BACKEND_REPO}:${DEPLOY_ENV}-latest
+
+                        echo "=== Cleaning up local image ==="
+                        docker rmi ${BACKEND_REPO}:${imageTag} || true
+                        docker rmi ${BACKEND_REPO}:${DEPLOY_ENV}-latest || true
+                    """
+
+                    // Build and push FRONTEND
+                    sh """
+                        echo "=== Building frontend image ==="
+                        docker build \
+                            -t ${FRONTEND_REPO}:${imageTag} \
+                            -t ${FRONTEND_REPO}:${DEPLOY_ENV}-latest \
+                            --build-arg REACT_APP_API_URL=https://api.${DEPLOY_ENV}.mnc-app.internal \
+                            --build-arg GIT_COMMIT=${GIT_COMMIT_SHORT} \
+                            -f app/frontend/Dockerfile \
+                            app/frontend/
+
+                        echo "=== Pushing frontend to ECR ==="
+                        docker push ${FRONTEND_REPO}:${imageTag}
+                        docker push ${FRONTEND_REPO}:${DEPLOY_ENV}-latest
+
+                        docker rmi ${FRONTEND_REPO}:${imageTag} || true
+                        docker rmi ${FRONTEND_REPO}:${DEPLOY_ENV}-latest || true
+                    """
+
+                    // Save the image tag for use in deploy stages
+                    env.IMAGE_TAG = imageTag
+                }
+            }
+        }
+
+        // ── STAGE 5a: Deploy to DEV ───────────────────────────────────────
+        // Fully automatic — no approval needed for dev.
+        // Triggered on every push to 'develop' branch.
+        stage('Deploy → DEV') {
+            when {
+                branch 'develop'
+            }
+            steps {
+                script {
+                    deployToEnvironment('dev', env.IMAGE_TAG)
+                }
+            }
+        }
+
+        // ── STAGE 5b: Staging Approval Gate ──────────────────────────────
+        // Requires ONE person to click "Proceed" in Jenkins UI.
+        // This is the standard MNC gate before staging deployment.
+        stage('Approval: Deploy to STAGING?') {
+            when {
+                branch pattern: 'release/.*', comparator: 'REGEXP'
+            }
+            steps {
+                script {
+                    // Send notification to team (Slack/email in real setup)
+                    echo "Build ${BUILD_NUMBER} is ready for STAGING deployment."
+                    echo "Commit: ${GIT_COMMIT_SHORT} | Branch: ${BRANCH_NAME}"
+
+                    // This pauses the pipeline and shows a UI button in Jenkins
+                    def approval = input(
+                        id: 'staging-approval',
+                        message: "Deploy build #${BUILD_NUMBER} (${GIT_COMMIT_SHORT}) to STAGING?",
+                        ok: 'Deploy to Staging',
+                        submitter: 'dev-leads,devops-team',  // Only these Jenkins roles can approve
+                        parameters: [
+                            string(
+                                name: 'APPROVER_COMMENT',
+                                description: 'Optional: Add a comment (change ticket, test results, etc.)',
+                                defaultValue: ''
+                            )
+                        ]
+                    )
+                    echo "Staging deployment approved. Comment: ${approval}"
+                }
+            }
+        }
+
+        stage('Deploy → STAGING') {
+            when {
+                branch pattern: 'release/.*', comparator: 'REGEXP'
+            }
+            steps {
+                script {
+                    deployToEnvironment('staging', env.IMAGE_TAG)
+                }
+            }
+        }
+
+        // ── STAGE 5c: Prod Dual Approval Gate ────────────────────────────
+        // Requires TWO separate approvals from different people.
+        // This is the DUAL CONTROL requirement in banking (SOX/PCI-DSS).
+        // Person A approves first, then Person B must also approve.
+        stage('Approval 1/2: Tech Lead Sign-off') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    echo "PRODUCTION deployment requested for commit ${GIT_COMMIT_SHORT}"
+                    echo "Waiting for Tech Lead approval (Approval 1 of 2)..."
+
+                    input(
+                        id: 'prod-approval-1',
+                        message: "PROD DEPLOY — Approval 1/2: Tech Lead\n\nBuild: #${BUILD_NUMBER}\nCommit: ${GIT_COMMIT_SHORT}\nBranch: ${BRANCH_NAME}",
+                        ok: 'Approve (1/2)',
+                        submitter: 'tech-leads',     // Tech lead role in Jenkins
+                        parameters: [
+                            string(name: 'CHANGE_REQUEST_ID', description: 'ServiceNow Change Request ID (mandatory)', defaultValue: ''),
+                            string(name: 'DEPLOYMENT_WINDOW',  description: 'Planned deployment window (e.g. 2AM-4AM IST Sat)', defaultValue: '')
+                        ]
+                    )
+                }
+            }
+        }
+
+        stage('Approval 2/2: DevOps Manager Sign-off') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    echo "Waiting for DevOps Manager approval (Approval 2 of 2)..."
+
+                    input(
+                        id: 'prod-approval-2',
+                        message: "PROD DEPLOY — Approval 2/2: DevOps Manager\n\nBuild: #${BUILD_NUMBER}\nCommit: ${GIT_COMMIT_SHORT}",
+                        ok: 'Final Approve — Deploy to PROD',
+                        submitter: 'devops-managers',  // Different role — must be different person
+                        parameters: [
+                            booleanParam(name: 'ROLLBACK_PLAN_CONFIRMED', description: 'I confirm rollback procedure is documented', defaultValue: false),
+                            booleanParam(name: 'OFF_HOURS_VERIFIED',       description: 'I confirm this is deploying in off-peak hours', defaultValue: false)
+                        ]
+                    )
+                }
+            }
+        }
+
+        stage('Deploy → PROD') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    deployToEnvironment('prod', env.IMAGE_TAG)
+                }
+            }
+        }
+
+        // ── STAGE 6: Smoke Tests ──────────────────────────────────────────
+        // Quick health checks after every deployment.
+        // Rolls back automatically if health check fails.
+        stage('Smoke Tests') {
+            when {
+                expression { DEPLOY_ENV != 'none' }
+            }
+            steps {
+                script {
+                    runSmokeTests(DEPLOY_ENV)
+                }
+            }
+        }
+
+    } // end stages
+
+    // ── Post-build actions ────────────────────────────────────────────────
+    post {
+        success {
+            echo "✅ Pipeline SUCCESS — ${BRANCH_NAME} build #${BUILD_NUMBER}"
+            // In real MNC: send Slack/Teams notification
+            // slackSend channel: '#deployments', color: 'good',
+            //   message: "✅ ${PROJECT_NAME} deployed to ${DEPLOY_ENV} | ${GIT_COMMIT_SHORT}"
+        }
+        failure {
+            echo "❌ Pipeline FAILED — ${BRANCH_NAME} build #${BUILD_NUMBER}"
+            // In real MNC: page on-call via PagerDuty for prod failures
+            // slackSend channel: '#alerts', color: 'danger',
+            //   message: "❌ PIPELINE FAILED: ${PROJECT_NAME} | ${BRANCH_NAME} | ${GIT_COMMIT_SHORT}"
+        }
+        always {
+            // Clean up Docker images and workspace to prevent disk bloat
+            sh "docker system prune -f --filter 'until=24h' || true"
+            cleanWs()
+        }
+    }
+
+} // end pipeline
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHARED FUNCTIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// deployToEnvironment — performs the actual Kubernetes deployment.
+// Order of operations:
+//   1. Update kubeconfig
+//   2. Apply namespace (idempotent — creates it if missing)
+//   3. Inject DB secret from SSM into Kubernetes (must happen before pods start)
+//   4. Substitute image tag + ECR registry placeholders in manifests
+//   5. kubectl apply all manifests
+//   6. Wait for rollout to complete
+def deployToEnvironment(String env, String imageTag) {
+    echo "=== Deploying to ${env.toUpperCase()} | Image tag: ${imageTag} ==="
+
+    sh """
+        # ── Step 1: Point kubectl at the right cluster ────────────────────
+        aws eks update-kubeconfig \
+            --region ${AWS_REGION} \
+            --name mnc-app-${env}-cluster
+
+        kubectl config current-context
+        kubectl cluster-info
+
+        # ── Step 2: Ensure namespace exists ──────────────────────────────
+        kubectl apply -f k8s/${env}/namespace.yaml
+
+        # ── Step 3: Inject DB password from SSM into Kubernetes Secret ───
+        # This MUST happen before applying deployments — pods read the secret
+        # at startup. If the secret doesn't exist, pods crash with:
+        #   "secret app-db-secret not found"
+        # We pull the password from SSM (stored there by Terraform) and create
+        # the K8s Secret without ever writing the password to disk.
+        echo "=== Injecting DB secret for ${env} ==="
+        DB_PASSWORD=\$(aws ssm get-parameter \
+            --name "/${PROJECT_NAME}/${env}/db/password" \
+            --with-decryption \
+            --query "Parameter.Value" \
+            --output text \
+            --region ${AWS_REGION})
+
+        kubectl create secret generic app-db-secret \
+            --from-literal=DB_PASSWORD="\$DB_PASSWORD" \
+            --namespace=${env} \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+        # Unset immediately — don't leave passwords in the shell environment
+        unset DB_PASSWORD
+        echo "=== Secret injected ==="
+
+        # ── Step 4: Substitute placeholders in deployment manifests ───────
+        # sed -i edits the file in-place on the Jenkins workspace.
+        # These placeholder strings exist in the YAML files as-committed —
+        # sed replaces them with the real values for this particular build.
+        # Note: we use a temp copy so the git working tree stays clean.
+        cp k8s/${env}/backend-deployment.yaml  /tmp/backend-deploy-${env}.yaml
+        cp k8s/${env}/frontend-deployment.yaml /tmp/frontend-deploy-${env}.yaml
+
+        sed -i 's|IMAGE_TAG_PLACEHOLDER|${imageTag}|g'    /tmp/backend-deploy-${env}.yaml
+        sed -i 's|ECR_REGISTRY_PLACEHOLDER|${ECR_REGISTRY}|g' /tmp/backend-deploy-${env}.yaml
+        sed -i 's|IMAGE_TAG_PLACEHOLDER|${imageTag}|g'    /tmp/frontend-deploy-${env}.yaml
+        sed -i 's|ECR_REGISTRY_PLACEHOLDER|${ECR_REGISTRY}|g' /tmp/frontend-deploy-${env}.yaml
+
+        # ── Step 5: Apply all manifests ───────────────────────────────────
+        # Apply static manifests (namespace, configmap, secret template, services, ingress)
+        kubectl apply -f k8s/${env}/configmap.yaml    --namespace=${env}
+        kubectl apply -f k8s/${env}/secret.yaml       --namespace=${env}
+
+        # Apply the ingress + services (different structure per env)
+        if [ -f k8s/${env}/ingress.yaml ]; then
+            # dev has separate ingress.yaml
+            kubectl apply -f k8s/${env}/backend-service.yaml  --namespace=${env}
+            kubectl apply -f k8s/${env}/frontend-service.yaml --namespace=${env}
+            kubectl apply -f k8s/${env}/ingress.yaml           --namespace=${env}
+        else
+            # staging and prod use combined services-ingress.yaml
+            kubectl apply -f k8s/${env}/services-ingress.yaml --namespace=${env}
+        fi
+
+        # Apply the substituted deployment manifests from /tmp
+        kubectl apply -f /tmp/backend-deploy-${env}.yaml  --namespace=${env}
+        kubectl apply -f /tmp/frontend-deploy-${env}.yaml --namespace=${env}
+
+        # ── Step 6: Wait for rollouts to complete ─────────────────────────
+        # This blocks until ALL pods are healthy or 5 minutes elapse.
+        # If pods enter CrashLoopBackOff, this surfaces the failure immediately.
+        echo "=== Waiting for backend rollout ==="
+        kubectl rollout status deployment/backend \
+            --namespace=${env} \
+            --timeout=300s
+
+        echo "=== Waiting for frontend rollout ==="
+        kubectl rollout status deployment/frontend \
+            --namespace=${env} \
+            --timeout=300s
+
+        echo "=== Current pod status ==="
+        kubectl get pods --namespace=${env} -o wide
+
+        # Clean up temp files
+        rm -f /tmp/backend-deploy-${env}.yaml /tmp/frontend-deploy-${env}.yaml
+    """
+}
+
+
+// runSmokeTests — quick health checks after deployment.
+// If these fail, we roll back immediately.
+def runSmokeTests(String env) {
+    echo "=== Running smoke tests against ${env} ==="
+
+    script {
+        try {
+            sh """
+                # Get the ALB URL for this environment
+                ALB_URL=\$(kubectl get ingress app-ingress \
+                    --namespace=${env} \
+                    -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+
+                echo "Testing ${env} ALB: \$ALB_URL"
+
+                # Wait for ALB to be ready (DNS propagation takes time)
+                sleep 30
+
+                # Health check — backend actuator endpoint
+                HTTP_CODE=\$(curl -s -o /dev/null -w "%{http_code}" \
+                    http://\$ALB_URL/actuator/health)
+
+                if [ "\$HTTP_CODE" != "200" ]; then
+                    echo "❌ Health check failed! HTTP \$HTTP_CODE"
+                    exit 1
+                fi
+
+                echo "✅ Backend health check passed (HTTP 200)"
+
+                # Basic API test
+                HTTP_CODE=\$(curl -s -o /dev/null -w "%{http_code}" \
+                    http://\$ALB_URL/api/products)
+
+                if [ "\$HTTP_CODE" != "200" ]; then
+                    echo "❌ API test failed! HTTP \$HTTP_CODE"
+                    exit 1
+                fi
+
+                echo "✅ API test passed (HTTP 200)"
+            """
+        } catch (Exception e) {
+            echo "❌ Smoke tests FAILED — initiating rollback for ${env}"
+            sh """
+                kubectl rollout undo deployment/backend  --namespace=${env}
+                kubectl rollout undo deployment/frontend --namespace=${env}
+                echo "⏪ Rollback initiated. Monitor with: kubectl rollout status deployment/backend --namespace=${env}"
+            """
+            error("Smoke tests failed and rollback was triggered for ${env}")
+        }
+    }
+}

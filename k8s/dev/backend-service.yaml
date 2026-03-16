@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+  namespace: dev
+  labels:
+    app: backend
+    environment: dev
+spec:
+  # ClusterIP = internal only. The ALB Ingress controller reads the Ingress
+  # resource and creates an AWS ALB that routes external traffic to this Service.
+  # Never use NodePort or LoadBalancer type directly in production on EKS.
+  type: ClusterIP
+  selector:
+    app: backend
+    environment: dev
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP

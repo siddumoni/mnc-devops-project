@@ -1,0 +1,44 @@
+# ─── Terraform ───────────────────────────────
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+*.tfplan
+terraform.tfvars.local   # local overrides with real secrets — NEVER commit this
+
+# ─── Java / Maven ────────────────────────────
+target/
+*.jar
+*.war
+*.class
+.mvn/
+
+# ─── Node / React ────────────────────────────
+node_modules/
+build/
+.env
+.env.local
+.env.production.local
+
+# ─── Docker ──────────────────────────────────
+*.dockerignore
+
+# ─── IDE ─────────────────────────────────────
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# ─── Secrets — NEVER commit these ────────────
+*.pem
+*.key
+*-secret.yaml.real
+secrets/
+credentials
+
+# ─── Jenkins ─────────────────────────────────
+jenkins/workspace/
+
+# Environment files
+*.env
+.env.*

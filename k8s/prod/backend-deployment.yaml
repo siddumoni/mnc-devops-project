@@ -1,0 +1,151 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: prod
+  labels:
+    app: backend
+    environment: prod
+  annotations:
+    # In prod, document why every change was made
+    kubernetes.io/change-cause: "Deployed via Jenkins pipeline build IMAGE_TAG_PLACEHOLDER"
+spec:
+  replicas: 3   # Prod: 3 replicas across 2 AZs (1 per node minimum)
+  selector:
+    matchLabels:
+      app: backend
+      environment: prod
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0   # Zero-downtime: never take a pod down before a new one is READY
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: backend
+        environment: prod
+        version: IMAGE_TAG_PLACEHOLDER
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      # Prod gets longer grace period — give requests more time to complete
+      terminationGracePeriodSeconds: 90
+      containers:
+        - name: backend
+          image: ECR_REGISTRY_PLACEHOLDER/mnc-app/backend:IMAGE_TAG_PLACEHOLDER
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              name: http
+          # Prod resources are larger — more CPU/memory for real traffic
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "768Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          envFrom:
+            - configMapRef:
+                name: app-config
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-db-secret
+                  key: DB_PASSWORD
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+            successThreshold: 1
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            failureThreshold: 12
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp-dir
+              mountPath: /tmp
+      volumes:
+        - name: tmp-dir
+          emptyDir: {}
+      # HARD anti-affinity in prod: pods MUST be on different nodes.
+      # In dev/staging we used "preferred" — in prod it's REQUIRED.
+      # This ensures one node going down doesn't take all pods with it.
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values: [backend]
+              topologyKey: kubernetes.io/hostname
+---
+# ── HPA — Horizontal Pod Autoscaler ──────────────────────────────────────
+# Automatically adds/removes pods based on CPU usage.
+# Scale out when average CPU > 70%, scale in when < 70%.
+# Min 3 pods (so we always have HA), max 10 pods.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend-hpa
+  namespace: prod
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: backend
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+---
+# ── PodDisruptionBudget — protects prod during node drains ───────────────
+# When a node is drained (for maintenance, updates, or Cluster Autoscaler
+# scale-in), Kubernetes won't evict a pod if it would violate this budget.
+# "At least 2 backend pods must always be available."
+# Without this, node drain could take all pods offline simultaneously.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: backend-pdb
+  namespace: prod
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: backend
+      environment: prod

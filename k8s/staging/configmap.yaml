@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: staging
+  labels:
+    app: mnc-app
+    environment: staging
+data:
+  DB_HOST: "mnc-app-staging-mysql.xxxxxxxxxx.ap-south-1.rds.amazonaws.com"
+  DB_NAME: "mnc_app_staging"
+  DB_USERNAME: "appuser"
+  SPRING_PROFILES_ACTIVE: "staging"
+  DEPLOY_ENV: "staging"
+  LOG_LEVEL: "INFO"               # Less verbose than dev
+  JAVA_OPTS: "-Xmx768m -Xms512m"

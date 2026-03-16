@@ -1,0 +1,20 @@
+# ConfigMap holds non-sensitive configuration.
+# Secrets (passwords) go in a separate Secret object or AWS SSM.
+# This is the MNC separation: config in ConfigMap, credentials in Secrets.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: dev
+  labels:
+    app: mnc-app
+    environment: dev
+data:
+  # These are injected as environment variables into pods
+  DB_HOST: "mnc-app-dev-mysql.xxxxxxxxxx.ap-south-1.rds.amazonaws.com"   # Replace with actual RDS endpoint (Terraform output)
+  DB_NAME: "mnc_app_dev"
+  DB_USERNAME: "appuser"
+  SPRING_PROFILES_ACTIVE: "dev"
+  DEPLOY_ENV: "dev"
+  LOG_LEVEL: "DEBUG"              # More verbose in dev
+  JAVA_OPTS: "-Xmx512m -Xms256m" # Smaller heap for dev nodes

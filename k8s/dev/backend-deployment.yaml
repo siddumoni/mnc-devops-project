@@ -1,0 +1,157 @@
+# ─────────────────────────────────────────────
+# Backend Deployment — DEV environment
+#
+# Key production patterns demonstrated here:
+#   - Image tag is never 'latest' — always a git SHA
+#   - Resource requests AND limits (both required for QoS)
+#   - Liveness + readiness probes (Kubernetes health management)
+#   - Rolling update strategy (zero-downtime deployments)
+#   - Security context (non-root, read-only filesystem)
+#   - Environment variables from ConfigMap + Secret
+# ─────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: dev
+  labels:
+    app: backend
+    environment: dev
+    version: IMAGE_TAG_PLACEHOLDER    # Jenkins replaces this with the actual git SHA tag
+  annotations:
+    deployment.kubernetes.io/revision: "1"
+spec:
+  replicas: 1    # Dev: 1 replica is enough (save cost)
+
+  selector:
+    matchLabels:
+      app: backend
+      environment: dev
+
+  # Rolling update strategy — zero-downtime deployments:
+  # - maxUnavailable: 0 → never take a pod down before a new one is ready
+  # - maxSurge: 1       → spin up 1 extra pod during update
+  # Together: new pod comes up, old pod is terminated. No gap in service.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+
+  template:
+    metadata:
+      labels:
+        app: backend
+        environment: dev
+        version: IMAGE_TAG_PLACEHOLDER
+      annotations:
+        # Force pod restart when ConfigMap changes (even if image tag unchanged)
+        checksum/config: "{{ include (print $.Template.BasePath \"/configmap.yaml\") . | sha256sum }}"
+
+    spec:
+      # Security context for the entire pod
+      securityContext:
+        runAsNonRoot: true      # Pod cannot run as root
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+
+      # Graceful shutdown: give the app 60s to finish in-flight requests
+      terminationGracePeriodSeconds: 60
+
+      containers:
+        - name: backend
+          # Jenkins replaces both placeholders before kubectl apply
+          image: ECR_REGISTRY_PLACEHOLDER/mnc-app/backend:IMAGE_TAG_PLACEHOLDER
+          imagePullPolicy: Always   # Always pull — ensures we never run a stale cached image
+
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+
+          # Resource management is MANDATORY in MNC environments.
+          # Without limits, one runaway pod can starve all others on the node.
+          # requests = what Kubernetes reserves for scheduling
+          # limits   = hard cap — pod is killed if it exceeds this
+          resources:
+            requests:
+              cpu: "250m"       # 0.25 CPU core
+              memory: "512Mi"
+            limits:
+              cpu: "500m"       # 0.5 CPU core
+              memory: "768Mi"
+
+          # Environment variables from ConfigMap (non-sensitive)
+          envFrom:
+            - configMapRef:
+                name: app-config
+
+          # Database password from Secret (sensitive)
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-db-secret
+                  key: DB_PASSWORD
+
+          # ── Health Probes ────────────────────────────────────────────
+          # Readiness: "Is this pod ready to receive traffic?"
+          # Kubernetes will NOT send traffic until this passes.
+          # This is critical: without it, requests hit pods that aren't
+          # fully started yet (DB connection not established, etc.)
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 30    # Spring Boot takes ~20-25s to start
+            periodSeconds: 10
+            failureThreshold: 3
+            successThreshold: 1
+
+          # Liveness: "Is this pod still alive?"
+          # If this fails, Kubernetes RESTARTS the pod.
+          # Use a lighter endpoint than readiness — just "am I up?"
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 3
+
+          # Startup probe: gives slow-starting apps extra time on first boot
+          # Without this, livenessProbe might kill the pod before it's ready
+          startupProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            failureThreshold: 12      # 12 × 10s = 2 minutes max startup time
+            periodSeconds: 10
+
+          # Security context for the container
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+
+          # Writable temp dir (needed by Spring Boot for multipart uploads, etc.)
+          volumeMounts:
+            - name: tmp-dir
+              mountPath: /tmp
+
+      volumes:
+        - name: tmp-dir
+          emptyDir: {}
+
+      # Spread pods across nodes for availability
+      # (only matters when replicas > 1, but good habit to always include)
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: backend
