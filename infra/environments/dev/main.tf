@@ -22,7 +22,7 @@ terraform {
 
   # Dev gets its own state file — never share state between environments
   backend "s3" {
-    bucket         = "mnc-app-terraform-state"   # bootstrap.ps1 patches this with the real bucket name
+    bucket = "mnc-app-terraform-state-204803374292"   # bootstrap.ps1 patches this with the real bucket name
     key            = "environments/dev/terraform.tfstate"
     region         = "ap-south-1"
     encrypt        = true

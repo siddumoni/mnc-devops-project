@@ -122,7 +122,7 @@ resource "aws_security_group" "nodes" {
     to_port         = 443
     protocol        = "tcp"
     security_groups = [var.jenkins_sg_id]
-    description     = "Jenkins → EKS API"
+    description     = "Jenkins to EKS API"
   }
 
   # Allow ALB to reach pods
@@ -131,7 +131,7 @@ resource "aws_security_group" "nodes" {
     to_port         = 8080
     protocol        = "tcp"
     security_groups = [var.alb_sg_id]
-    description     = "ALB → backend pods"
+    description     = "ALB to backend pods"
   }
 
   ingress {
@@ -139,7 +139,7 @@ resource "aws_security_group" "nodes" {
     to_port         = 3000
     protocol        = "tcp"
     security_groups = [var.alb_sg_id]
-    description     = "ALB → frontend pods"
+    description     = "ALB to frontend pods"
   }
 
   egress {

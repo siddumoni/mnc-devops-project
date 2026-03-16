@@ -22,7 +22,7 @@ terraform {
 
   # Separate state file for staging — never share state between environments
   backend "s3" {
-    bucket         = "mnc-app-terraform-state"   # bootstrap.sh patches this with the real bucket name
+    bucket = "mnc-app-terraform-state-204803374292"   # bootstrap.sh patches this with the real bucket name
     key            = "environments/staging/terraform.tfstate"
     region         = "ap-south-1"
     encrypt        = true

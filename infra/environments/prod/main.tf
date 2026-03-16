@@ -22,7 +22,7 @@ terraform {
 
   # Prod state is in its own key — completely isolated from dev and staging
   backend "s3" {
-    bucket         = "mnc-app-terraform-state"   # bootstrap.sh patches this
+    bucket = "mnc-app-terraform-state-204803374292"   # bootstrap.sh patches this
     key            = "environments/prod/terraform.tfstate"
     region         = "ap-south-1"
     encrypt        = true

@@ -183,7 +183,6 @@ resource "aws_instance" "jenkins" {
   user_data = base64encode(templatefile("${path.module}/userdata.sh", {
     project_name   = var.project_name
     aws_region     = var.aws_region
-    aws_account_id = var.aws_account_id
     cluster_name   = var.cluster_name
     sonarqube_port = 9000
   }))
