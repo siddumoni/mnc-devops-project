@@ -15,7 +15,7 @@
 project_name    = "mnc-app"
 environment     = "dev"
 aws_region      = "ap-south-1"
-aws_account_id  = "123456789012"   # ← Replace with your account ID
+aws_account_id  = "204803374292"   # ← Replace with your account ID
 
 # Networking — dev gets its own /16 CIDR to avoid conflicts
 vpc_cidr             = "10.10.0.0/16"
@@ -25,10 +25,10 @@ availability_zones   = ["ap-south-1a", "ap-south-1b"]
 
 # Access
 ec2_key_name        = "mnc-app-keypair"         # ← Create this key pair in EC2 console first
-allowed_cidr_blocks = ["YOUR_OFFICE_IP/32"]      # ← Replace with your actual IP
+allowed_cidr_blocks = ["122.164.81.39/32"]      # ← Replace with your actual IP
 
 # Jenkins
-jenkins_ami_id       = "ami-0f58b397bc5c1f2e8"  # Amazon Linux 2023 — ap-south-1
+jenkins_ami_id       = "ami-0e267a9919cdf778f"  # Amazon Linux 2023 — ap-south-1
 jenkins_instance_type = "t3.large"              # 2 vCPU, 8 GB — sufficient for dev builds
 
 # EKS

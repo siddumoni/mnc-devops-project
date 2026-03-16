@@ -1,7 +1,7 @@
 project_name    = "mnc-app"
 environment     = "staging"
 aws_region      = "ap-south-1"
-aws_account_id  = "123456789012"
+aws_account_id  = "204803374292"
 
 vpc_cidr             = "10.20.0.0/16"
 public_subnet_cidrs  = ["10.20.1.0/24", "10.20.2.0/24"]
@@ -9,9 +9,9 @@ private_subnet_cidrs = ["10.20.10.0/24", "10.20.11.0/24"]
 availability_zones   = ["ap-south-1a", "ap-south-1b"]
 
 ec2_key_name        = "mnc-app-keypair"
-allowed_cidr_blocks = ["YOUR_OFFICE_IP/32"]
+allowed_cidr_blocks = ["122.164.81.39/32"]
 
-jenkins_ami_id        = "ami-0f58b397bc5c1f2e8"
+jenkins_ami_id        = "ami-0e267a9919cdf778f"
 jenkins_instance_type = "t3.large"
 
 kubernetes_version  = "1.29"

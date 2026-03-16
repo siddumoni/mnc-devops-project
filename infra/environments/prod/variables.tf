@@ -3,7 +3,10 @@ variable "project_name"          { type = string }
 variable "environment"           { type = string }
 variable "aws_region"            { type = string }
 variable "aws_account_id"        { type = string }
-variable "cost_center"           { type = string; default = "engineering" }
+variable "cost_center"           { 
+    type = string
+    default = "engineering" 
+    }
 variable "vpc_cidr"              { type = string }
 variable "public_subnet_cidrs"   { type = list(string) }
 variable "private_subnet_cidrs"  { type = list(string) }
@@ -19,9 +22,15 @@ variable "desired_nodes"         { type = number }
 variable "min_nodes"             { type = number }
 variable "max_nodes"             { type = number }
 variable "db_username"           { type = string }
-variable "db_password"           { type = string; sensitive = true }
+variable "db_password"           { 
+    type = string
+    sensitive = true 
+    }
 variable "db_instance_class"     { type = string }
 variable "db_storage"            { type = number }
 variable "create_ecr"            { type = bool }
 
-variable "acm_certificate_arn" { type = string; default = "" }
+variable "acm_certificate_arn" { 
+    type = string
+    default = "" 
+    }
