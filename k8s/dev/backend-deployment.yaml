@@ -4,7 +4,7 @@
 # Key production patterns demonstrated here:
 #   - Image tag is never 'latest' — always a git SHA
 #   - Resource requests AND limits (both required for QoS)
-#   - Liveness + readiness probes (Kubernetes health management)
+#   - Liveness + readiness + startup probes (Kubernetes health management)
 #   - Rolling update strategy (zero-downtime deployments)
 #   - Security context (non-root, read-only filesystem)
 #   - Environment variables from ConfigMap + Secret
@@ -44,9 +44,6 @@ spec:
         app: backend
         environment: dev
         version: IMAGE_TAG_PLACEHOLDER
-      annotations:
-        # Force pod restart when ConfigMap changes (even if image tag unchanged)
-        checksum/config: "{{ include (print $.Template.BasePath \"/configmap.yaml\") . | sha256sum }}"
 
     spec:
       # Security context for the entire pod
@@ -120,13 +117,14 @@ spec:
             periodSeconds: 15
             failureThreshold: 3
 
-          # Startup probe: gives slow-starting apps extra time on first boot
-          # Without this, livenessProbe might kill the pod before it's ready
+          # Startup probe: gives slow-starting apps extra time on first boot.
+          # Without this, livenessProbe might kill the pod before it's ready.
+          # 12 failures × 10s interval = up to 2 minutes for startup.
           startupProbe:
             httpGet:
               path: /actuator/health
               port: 8080
-            failureThreshold: 12      # 12 × 10s = 2 minutes max startup time
+            failureThreshold: 12
             periodSeconds: 10
 
           # Security context for the container

@@ -1,9 +1,8 @@
 # MNC App — DevOps Infrastructure Setup Guide (Windows 11)
 
-A production-grade 3-tier Java application deployed on AWS using Terraform, Jenkins, ECR, EKS, and RDS MySQL.  
-This guide is written entirely for **Windows 11 using PowerShell**. Every command here runs natively on Windows — no WSL required.
-
-> **Before you start:** Read the entire guide once top-to-bottom before running any command. Understanding the full picture prevents costly mistakes, especially around the two-pass Terraform apply (Step 5) and the aws-auth timing (Step 5.4).
+A production-grade 3-tier Java application deployed on AWS using Terraform, Jenkins, ECR, and EKS.
+This guide is written entirely for **Windows 11 using PowerShell**. Every command here runs natively
+on Windows — no WSL required (WSL2 is mentioned only as an optional shortcut where it genuinely helps).
 
 ---
 
@@ -16,7 +15,7 @@ This guide is written entirely for **Windows 11 using PowerShell**. Every comman
 5. [Step 2 — Configure Your Local Machine](#step-2--configure-your-local-machine)
 6. [Step 3 — Clone and Personalise the Repo](#step-3--clone-and-personalise-the-repo)
 7. [Step 4 — Bootstrap Remote State](#step-4--bootstrap-remote-state)
-8. [Step 5 — Deploy Dev Infrastructure (Two-Pass Apply)](#step-5--deploy-dev-infrastructure-two-pass-apply)
+8. [Step 5 — Deploy Dev Infrastructure](#step-5--deploy-dev-infrastructure)
 9. [Step 6 — Install the ALB Controller](#step-6--install-the-alb-controller)
 10. [Step 7 — Deploy Kubernetes Manifests](#step-7--deploy-kubernetes-manifests)
 11. [Step 8 — Configure Jenkins](#step-8--configure-jenkins)
@@ -61,17 +60,11 @@ GitHub (source) → Jenkins EC2 (CI/CD) → ECR (image registry) → EKS (runtim
 | `release/*`   | staging    | 1 approval (tech lead)       |
 | `main`        | prod       | 2 approvals (lead + DevOps)  |
 
-**Key design decisions explained:**
-
-- **Two separate EKS permission layers**: AWS IAM controls who can *call* AWS APIs (like `eks:GetToken`). Kubernetes RBAC controls what that identity can *do inside* the cluster. Both layers must be configured. The `aws-auth` ConfigMap in `kube-system` is the bridge. This is why Step 5 has a two-pass Terraform apply — the ConfigMap requires the cluster to already exist.
-- **ECR created once from dev**: `create_ecr = true` only in dev's `terraform.tfvars`. Staging and prod use `create_ecr = false` and reference the same ECR URLs. This means you build and push an image once, then promote the same image (by tag) through environments — you never rebuild for staging or prod.
-- **Database migrations via Flyway**: The app uses `spring.jpa.hibernate.ddl-auto=validate` — it validates the schema but never creates or modifies tables. Flyway handles all schema changes automatically on startup using versioned SQL files in `app/database/migration/`.
-
 ---
 
 ## 2. Prerequisites — Install All Tools
 
-Open **PowerShell as Administrator** for all installation steps.  
+Open **PowerShell as Administrator** for all installation steps.
 Right-click the Start button → **Terminal (Admin)** or **Windows PowerShell (Admin)**.
 
 ### 2.1 Enable script execution (one-time Windows setting)
@@ -92,7 +85,7 @@ winget --version
 # Expected: v1.x.x
 ```
 
-If missing: open the Microsoft Store and search for **App Installer**.
+If not installed, open the Microsoft Store and search for **App Installer**.
 
 ### 2.3 Install AWS CLI v2
 
@@ -100,7 +93,7 @@ If missing: open the Microsoft Store and search for **App Installer**.
 winget install Amazon.AWSCLI
 ```
 
-Close and reopen PowerShell, then verify:
+**Close and reopen PowerShell**, then verify:
 
 ```powershell
 aws --version
@@ -113,7 +106,7 @@ aws --version
 winget install Hashicorp.Terraform
 ```
 
-Close and reopen PowerShell, then verify:
+**Close and reopen PowerShell**, then verify:
 
 ```powershell
 terraform version
@@ -152,7 +145,7 @@ helm version
 winget install Git.Git
 ```
 
-Close and reopen PowerShell, then verify:
+**Close and reopen PowerShell**, then verify:
 
 ```powershell
 git --version
@@ -175,7 +168,7 @@ Close every PowerShell window and open a fresh one. Run this block:
 }
 ```
 
-All five must show green before continuing. If any are red, close and reopen PowerShell — PATH changes require a new shell session.
+All five should be green before continuing. If any are red, close and reopen PowerShell — PATH changes require a new shell session.
 
 ---
 
@@ -190,7 +183,7 @@ mnc-devops-project\
 │   ├── outputs.tf                  Values printed after terraform apply
 │   ├── modules\
 │   │   ├── vpc\                    VPC, subnets, NAT gateways, flow logs
-│   │   ├── eks\                    EKS cluster, node groups, OIDC, aws-auth, add-ons
+│   │   ├── eks\                    EKS cluster, node groups, OIDC, add-ons
 │   │   ├── ecr\                    Private Docker registries
 │   │   ├── ec2-jenkins\            Jenkins EC2, ALB, IAM role, security groups
 │   │   └── rds\                    MySQL RDS per environment
@@ -202,7 +195,7 @@ mnc-devops-project\
 ├── app\
 │   ├── backend\                    Spring Boot REST API (Java 17, Maven)
 │   │   ├── Dockerfile              Multi-stage: builder stage + slim runtime stage
-│   │   ├── pom.xml                 JPA, MySQL, Flyway, Actuator, JaCoCo, SonarQube plugin
+│   │   ├── pom.xml                 JPA, MySQL, Actuator, JaCoCo, SonarQube plugin
 │   │   └── src\
 │   │       ├── main\java\com\mnc\app\
 │   │       │   ├── controller\     REST endpoints (/api/products)
@@ -213,32 +206,25 @@ mnc-devops-project\
 │   ├── frontend\                   React app, served by Nginx
 │   │   ├── Dockerfile              Multi-stage: Node builder + Nginx runtime
 │   │   └── nginx.conf              SPA routing, gzip, security headers
-│   └── database\
-│       └── migration\
-│           └── V1__init_schema.sql Flyway migration: creates products table + seed data
+│   └── database\schema.sql         MySQL schema + seed data
 │
 ├── k8s\                            Kubernetes manifests — one folder per environment
 │   ├── dev\                        1 replica, DEBUG logs, smallest resources
-│   │   ├── secret.yaml             Placeholder — real value injected by Jenkins at deploy time
-│   │   └── ...
 │   ├── staging\                    2 replicas, preferred anti-affinity
-│   │   ├── secret.yaml             Placeholder — real value injected by Jenkins at deploy time
-│   │   └── ...
 │   └── prod\                       3 replicas + HPA + PodDisruptionBudget
-│       ├── secret.yaml             Placeholder — real value injected by Jenkins at deploy time
-│       └── ...
 │
 ├── jenkins\
 │   └── Jenkinsfile                 CI/CD pipeline: build → scan → push → approve → deploy
 │
-└── scripts\                        Operational helper scripts (bash versions for Linux/Mac)
-    ├── bootstrap.sh
-    ├── install-alb-controller.sh
-    ├── inject-secrets.sh
-    └── rollback.sh
+└── scripts\                        Operational scripts (run from your Windows machine)
+    ├── bootstrap.sh                Bash version (see Step 4 for PowerShell equivalent)
+    ├── install-alb-controller.sh   Bash version (see Step 6 for PowerShell equivalent)
+    ├── inject-secrets.sh           Bash version (see Step 7 for PowerShell equivalent)
+    └── rollback.sh                 Bash version (see Day-to-Day for PowerShell equivalent)
 ```
 
-> **About `k8s/*/secret.yaml`:** These files are placeholder skeletons. They define the `app-db-secret` Secret resource structure so `kubectl apply -f k8s/dev/` works without errors. The actual `DB_PASSWORD` value is never stored in these files. The Jenkinsfile injects the real password from AWS SSM at deploy time using `kubectl create secret --dry-run=client -o yaml | kubectl apply`, which overwrites the placeholder.
+> **Note on the .sh scripts:** The `scripts\` folder contains bash versions for Linux/Mac colleagues.
+> This guide gives you the PowerShell equivalent of every script inline so you do not need bash at all.
 
 ---
 
@@ -296,7 +282,7 @@ $AWS_ACCOUNT_ID = (aws sts get-caller-identity --query Account --output text)
 Write-Host "Account ID: $AWS_ACCOUNT_ID"
 ```
 
-> **Tip:** PowerShell variables (`$VAR`) only live for the current session. If you close and reopen PowerShell you will need to re-run this before any command that uses `$AWS_ACCOUNT_ID`.
+> **Tip:** PowerShell variables (`$VAR`) only live for the current session. If you close and reopen PowerShell you will need to re-run `$AWS_ACCOUNT_ID = (aws sts ...)` before commands that use it.
 
 ---
 
@@ -309,7 +295,7 @@ $MY_IP = (Invoke-WebRequest -Uri "https://ifconfig.me" -UseBasicParsing).Content
 Write-Host "Your public IP: $MY_IP"
 ```
 
-This IP restricts access to the Jenkins UI to your machine only. If you work from multiple locations, you can add multiple IPs or use a VPN IP.
+This IP will be used to restrict access to the Jenkins UI to your machine only. If you work from multiple locations, you can add multiple IPs or use a VPN IP.
 
 ### 2.2 Get the latest Amazon Linux 2023 AMI ID for ap-south-1
 
@@ -358,7 +344,7 @@ Paste this entire block into PowerShell. It auto-detects your account ID, IP, an
 ```powershell
 # Auto-detect values
 $ACCOUNT_ID = (aws sts get-caller-identity --query Account --output text)
-$MY_IP      = (Invoke-RestMethod -Uri "https://ifconfig.me/ip").Trim()
+$MY_IP = (Invoke-RestMethod -Uri "https://ifconfig.me/ip").Trim()
 $AMI_ID     = aws ec2 describe-images `
                   --owners amazon `
                   --filters "Name=name,Values=al2023-ami-2023*-x86_64" `
@@ -384,9 +370,8 @@ $files = @(
 foreach ($file in $files) {
     $content = Get-Content $file -Raw
     $content = $content -replace "123456789012",           $ACCOUNT_ID
-    $content = $content -replace "YOUR_OFFICE_IP",         "$MY_IP/32"
+    $content = $content -replace "YOUR_OFFICE_IP",         $MY_IP
     $content = $content -replace "ami-0f58b397bc5c1f2e8",  $AMI_ID
-    $content = $content -replace "ami-0e267a9919cdf778f",  $AMI_ID
     Set-Content -Path $file -Value $content -NoNewline
     Write-Host "  Updated: $file" -ForegroundColor Green
 }
@@ -397,12 +382,14 @@ foreach ($file in $files) {
 ```powershell
 Select-String `
     -Path "infra\environments\dev\terraform.tfvars" `
-    -Pattern "aws_account_id|allowed_cidr|ami_id|jenkins_ami_id"
+    -Pattern "aws_account_id|allowed_cidr|ami_id"
 ```
 
-You should see your real account ID, your real IP (with `/32`), and the real AMI ID — not placeholders.
+You should see your real account ID, your real IP, and the real AMI ID — not placeholders.
 
-### 3.4 Understanding the Terraform module structure (important — read before running)
+### 3.3a Understanding the Terraform module structure (important — read before running)
+
+Before running `terraform init`, understand how this project is organised so you are not confused when you look at the files:
 
 ```
 environments/dev/main.tf      ← you run terraform from HERE
@@ -415,9 +402,9 @@ environments/dev/main.tf      ← you run terraform from HERE
               └── modules/rds/
 ```
 
-The `terraform {}` block with the `backend "s3" {}` section lives **only** in `environments/dev/main.tf`, `environments/staging/main.tf`, and `environments/prod/main.tf`. The root `infra/main.tf` intentionally has **no** `terraform {}` block.
+The `terraform {}` block with the `backend "s3" {}` section lives **only** in `environments/dev/main.tf`, `environments/staging/main.tf`, and `environments/prod/main.tf`. The root `infra/main.tf` intentionally has **no** `terraform {}` block because Terraform does not allow backend configuration inside a called module — only inside the root configuration (the directory where you actually run `terraform init`).
 
-### 3.5 Push the changes to GitHub
+### 3.4 Push the changes to GitHub
 
 ```powershell
 git add .
@@ -464,11 +451,13 @@ if ($LASTEXITCODE -eq 0) {
         --bucket $STATE_BUCKET `
         --versioning-configuration Status=Enabled | Out-Null
 
+    # Encryption at rest
     $encConfig = '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
     aws s3api put-bucket-encryption `
         --bucket $STATE_BUCKET `
         --server-side-encryption-configuration $encConfig | Out-Null
 
+    # Block all public access — state files must NEVER be public
     aws s3api put-public-access-block `
         --bucket $STATE_BUCKET `
         --public-access-block-configuration `
@@ -507,6 +496,7 @@ if ($LASTEXITCODE -eq 0) {
     $keyPath = "$env:USERPROFILE\.ssh\$KEY_PAIR_NAME.pem"
     $keyMaterial | Set-Content -Path $keyPath -NoNewline
 
+    # Restrict permissions (Windows equivalent of chmod 400)
     $acl = Get-Acl $keyPath
     $acl.SetAccessRuleProtection($true, $false)
     $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
@@ -516,10 +506,12 @@ if ($LASTEXITCODE -eq 0) {
     Set-Acl $keyPath $acl
 
     Write-Host "  Saved to: $keyPath" -ForegroundColor Green
-    Write-Host "  IMPORTANT: Back this up — you need it to SSH into EC2" -ForegroundColor Yellow
+    Write-Host "  IMPORTANT: Back this up - you need it to SSH into EC2" -ForegroundColor Yellow
 }
 
 # ── [4/4] Patch bucket name into all environment main.tf files ────────────
+# The bucket name lives in environments/dev/main.tf, staging/main.tf, and
+# prod/main.tf — NOT in infra/main.tf (the root module has no backend block).
 Write-Host "[4/4] Patching bucket name into environment main.tf files..." -ForegroundColor Yellow
 
 $envFiles = @(
@@ -543,9 +535,9 @@ Expected: all four steps show green. If Step 1 shows "Access Denied", your IAM u
 
 ---
 
-## Step 5 — Deploy Dev Infrastructure (Two-Pass Apply)
+## Step 5 — Deploy Dev Infrastructure
 
-> **Why two passes?** The Terraform `kubernetes` provider needs the EKS cluster endpoint to connect. But on the first run the cluster doesn't exist yet. If you run a single `terraform apply`, it fails with `dial tcp: connection refused` when it tries to create the `kubernetes_namespace` resource before the cluster is ready. The solution is to create the AWS infrastructure first (pass 1), wait for EKS to be healthy, then let Terraform create the Kubernetes resources (pass 2).
+This provisions VPC, EKS cluster, Jenkins EC2, ECR repos, and RDS. Takes about **15–20 minutes**.
 
 ### 5.1 Navigate to the dev environment
 
@@ -559,87 +551,54 @@ Set-Location "C:\Projects\mnc-devops-project\infra\environments\dev"
 terraform init
 ```
 
-Expected last few lines:
+Last few lines of expected output:
 ```
 Initializing the backend...
 Successfully configured the backend "s3"!
 Terraform has been successfully initialized!
 ```
 
-> **"Error: Failed to get existing workspaces"** — the S3 bucket doesn't exist. Go back and run Step 4 first.
+> **"Error: Failed to get existing workspaces"** — the S3 bucket doesn't exist. Go back and run Step 4.
 
-### 5.3 Pass 1 — Create all AWS infrastructure (skip the Kubernetes namespace)
-
-This creates the VPC, EKS cluster, Jenkins EC2, ECR repos, and RDS. It explicitly skips `kubernetes_namespace` because the cluster doesn't exist yet.
+### 5.3 Preview the plan
 
 ```powershell
-terraform apply `
-    -target="module.dev.module.vpc" `
-    -target="module.dev.module.jenkins" `
-    -target="module.dev.module.ecr" `
-    -target="module.dev.module.eks" `
-    -target="module.dev.module.rds" `
-    -target="module.dev.aws_security_group.alb" `
-    -target="module.dev.aws_ssm_parameter.db_host" `
-    -target="module.dev.aws_ssm_parameter.db_name" `
-    -target="module.dev.aws_ssm_parameter.db_password" `
-    -target="module.dev.aws_ssm_parameter.ecr_registry" `
+terraform plan `
     -var-file="terraform.tfvars" `
-    -var="db_password=DevPass123!"
+    -var="db_password=DevPass123!" `
+    -out="dev.tfplan"
 ```
 
-Type `yes` when prompted. EKS takes **10–15 minutes**. Watch for:
+> **Note on the backtick `` ` ``:** In PowerShell this is the line-continuation character (same as `\` in bash). The command above is one long command split across four lines.
+
+Scan the output — you should see **60–70 resources** being added. Key ones to confirm:
 ```
-Apply complete! Resources: 60+ added, 0 changed, 0 destroyed.
++ aws_vpc.main
++ aws_eks_cluster.main
++ aws_instance.jenkins
++ aws_ecr_repository.app["frontend"]
++ aws_ecr_repository.app["backend"]
++ aws_db_instance.main
 ```
 
-### 5.4 Wait for EKS nodes to become Ready
-
-After Terraform completes, the EKS nodes take 2–3 more minutes to register with the cluster.
+### 5.4 Apply
 
 ```powershell
-# Update kubeconfig first
-aws eks update-kubeconfig `
-    --region ap-south-1 `
-    --name mnc-app-dev-cluster
-
-# Watch nodes — wait until STATUS column shows "Ready" for all nodes
-kubectl get nodes -w
-# Press Ctrl+C when all nodes show Ready
+terraform apply "dev.tfplan"
 ```
 
-Expected (may take 2–3 minutes):
+Watch the output — EKS takes ~10 minutes. When complete:
 ```
-NAME                                          STATUS   ROLES    AGE
-ip-10-10-10-xx.ap-south-1.compute.internal   Ready    <none>   2m
-ip-10-10-11-xx.ap-south-1.compute.internal   Ready    <none>   2m
+Apply complete! Resources: 68 added, 0 changed, 0 destroyed.
 ```
 
-> **Why wait?** The aws-auth ConfigMap (created in Pass 1 by Terraform) maps the Jenkins IAM role to `system:masters`. This only takes effect once the API server is fully healthy. If you run Pass 2 too quickly you may hit a transient auth error — just re-run if that happens.
-
-### 5.5 Pass 2 — Full apply (creates the Kubernetes namespace)
-
-Now that EKS exists and the cluster is healthy, run the full apply with no `-target` flags:
-
-```powershell
-terraform apply `
-    -var-file="terraform.tfvars" `
-    -var="db_password=DevPass123!"
-```
-
-Type `yes` when prompted. This creates only the remaining resource:
-```
-+ module.dev.kubernetes_namespace.env
-Apply complete! Resources: 1 added, 0 changed, 0 destroyed.
-```
-
-### 5.6 Save the outputs — you will reference these throughout
+### 5.5 Save the outputs
 
 ```powershell
 terraform output
 ```
 
-Example output:
+You will see something like:
 ```
 cluster_name    = "mnc-app-dev-cluster"
 jenkins_alb_dns = "mnc-app-jenkins-alb-12345.ap-south-1.elb.amazonaws.com"
@@ -650,9 +609,9 @@ ecr_repository_urls = {
 }
 ```
 
-**Paste this into Notepad** — you will reference it in multiple later steps.
+Paste this into Notepad — you will reference it throughout the remaining steps.
 
-### 5.7 Update the dev ConfigMap with the real RDS endpoint
+### 5.6 Update the dev ConfigMap with the real RDS endpoint
 
 ```powershell
 # Go back to project root
@@ -663,24 +622,40 @@ $RDS_HOST = (terraform -chdir="infra\environments\dev" output -raw db_endpoint) 
 
 # Patch configmap.yaml
 $cm = Get-Content "k8s\dev\configmap.yaml" -Raw
-$cm = $cm -replace "mnc-app-dev-mysql\.[a-zA-Z0-9]+\.ap-south-1\.rds\.amazonaws\.com", $RDS_HOST
+$cm = $cm -replace "mnc-app-dev-mysql\.xxxxxxxxxx\.ap-south-1\.rds\.amazonaws\.com", $RDS_HOST
 Set-Content -Path "k8s\dev\configmap.yaml" -Value $cm -NoNewline
 
 Write-Host "ConfigMap updated with: $RDS_HOST" -ForegroundColor Green
+```
 
-# Commit and push the updated configmap
-git add k8s\dev\configmap.yaml
-git commit -m "config: update dev ConfigMap with actual RDS endpoint"
-git push origin main
+### 5.7 Connect kubectl to the EKS cluster
+
+```powershell
+aws eks update-kubeconfig `
+    --region ap-south-1 `
+    --name mnc-app-dev-cluster
+
+kubectl get nodes
+```
+
+Expected (nodes may take 2–3 minutes to reach Ready after Terraform completes):
+```
+NAME                                          STATUS   ROLES    AGE
+ip-10-10-10-xx.ap-south-1.compute.internal   Ready    <none>   2m
+ip-10-10-11-xx.ap-south-1.compute.internal   Ready    <none>   2m
 ```
 
 ---
 
 ## Step 6 — Install the ALB Controller
 
-Without this, applying `ingress.yaml` does nothing. The AWS Load Balancer Controller watches Ingress resources and creates real AWS ALBs. Run this from your Windows machine (not inside Jenkins).
+Without this, applying `ingress.yaml` does nothing. This controller watches Ingress resources and creates real AWS ALBs.
 
 ```powershell
+# Fix the file:// path format for Windows
+# $env:TEMP on Windows gives C:\Users\...\AppData\Local\Temp
+# AWS CLI on Windows needs file:// with the drive letter directly — no leading slash
+
 Set-Location "C:\Projects\mnc-devops-project"
 
 $AWS_REGION   = "ap-south-1"
@@ -688,9 +663,6 @@ $ACCOUNT_ID   = (aws sts get-caller-identity --query Account --output text)
 $CLUSTER_NAME = "mnc-app-dev-cluster"
 $POLICY_NAME  = "AWSLoadBalancerControllerIAMPolicy"
 $ROLE_NAME    = "mnc-app-dev-alb-controller-role"
-
-# Create C:\Temp if it doesn't exist
-New-Item -ItemType Directory -Path "C:\Temp" -Force | Out-Null
 
 # ── [1/4] IAM Policy ──────────────────────────────────────────────────────
 Write-Host "[1/4] Creating IAM policy..." -ForegroundColor Yellow
@@ -702,6 +674,7 @@ if ($LASTEXITCODE -ne 0) {
         -OutFile "C:\Temp\alb-policy.json" `
         -UseBasicParsing
 
+    # Windows fix: use file://C:\path format (no triple slash)
     aws iam create-policy `
         --policy-name $POLICY_NAME `
         --policy-document "file://C:\Temp\alb-policy.json"
@@ -737,6 +710,7 @@ $trust = @"
 }
 "@
 
+# Windows fix: write to C:\Temp and use file://C:\path format
 [System.IO.File]::WriteAllText("C:\Temp\alb-trust.json", $trust)
 
 $roleCheck = aws iam get-role --role-name $ROLE_NAME 2>&1
@@ -783,10 +757,9 @@ Write-Host ""
 kubectl get deployment aws-load-balancer-controller -n kube-system
 Write-Host "ALB Controller ready." -ForegroundColor Green
 
-# Cleanup temp files
+# Cleanup
 Remove-Item "C:\Temp\alb-policy.json" -Force -ErrorAction SilentlyContinue
 Remove-Item "C:\Temp\alb-trust.json"  -Force -ErrorAction SilentlyContinue
-```
 
 ---
 
@@ -818,7 +791,68 @@ Remove-Variable DB_PASS   # Clear from memory immediately
 Write-Host "Secret injected into namespace '$ENV_NAME'" -ForegroundColor Green
 ```
 
-### 7.2 Apply all manifests for dev
+### 7.2 Apply the database schema
+
+The Jenkins EC2 is in a private subnet — you reach it using **AWS Systems Manager Session Manager** (no open ports, no SSH key needed from your laptop).
+
+**Install the SSM Session Manager plugin for Windows (one-time):**
+
+```powershell
+# Download installer
+Invoke-WebRequest `
+    -Uri "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/windows/SessionManagerPluginSetup.exe" `
+    -OutFile "$env:TEMP\SSMPlugin.exe" `
+    -UseBasicParsing
+
+# Run installer (requires Admin PowerShell)
+Start-Process "$env:TEMP\SSMPlugin.exe" -Wait -Verb RunAs
+
+Write-Host "SSM plugin installed. Close and reopen PowerShell." -ForegroundColor Green
+```
+
+**After reopening PowerShell — upload the schema and apply it:**
+
+```powershell
+$ACCOUNT_ID = (aws sts get-caller-identity --query Account --output text)
+$BUCKET     = "mnc-app-terraform-state-$ACCOUNT_ID"
+$REGION     = "ap-south-1"
+
+# Upload schema to S3 so Jenkins can download it
+aws s3 cp "app\database\schema.sql" "s3://$BUCKET/tmp/schema.sql" --region $REGION
+
+# Get Jenkins instance ID
+$JENKINS_ID = aws ec2 describe-instances `
+    --filters "Name=tag:Name,Values=mnc-app-jenkins-master" `
+    --query "Reservations[0].Instances[0].InstanceId" `
+    --output text --region $REGION
+
+# Get RDS endpoint
+$RDS_HOST = (terraform -chdir="infra\environments\dev" output -raw db_endpoint) -replace ":3306", ""
+
+# Prompt for DB password (secure - doesn't show on screen)
+$securePass = Read-Host "Enter DB password used in terraform apply" -AsSecureString
+$DB_PASS    = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+                  [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePass))
+
+# Run schema via SSM Run Command
+$cmdId = aws ssm send-command `
+    --instance-ids $JENKINS_ID `
+    --document-name "AWS-RunShellScript" `
+    --parameters "commands=[
+        'aws s3 cp s3://$BUCKET/tmp/schema.sql /tmp/schema.sql --region $REGION',
+        'mysql -h $RDS_HOST -u appuser -p$DB_PASS < /tmp/schema.sql && echo Schema OK'
+    ]" `
+    --region $REGION `
+    --query "Command.CommandId" `
+    --output text
+
+Remove-Variable DB_PASS
+
+Write-Host "Schema command sent. Command ID: $cmdId"
+Write-Host "Check result: AWS Console → Systems Manager → Run Command → $cmdId"
+```
+
+### 7.3 Apply all manifests for dev
 
 ```powershell
 Set-Location "C:\Projects\mnc-devops-project"
@@ -829,7 +863,6 @@ Expected:
 ```
 namespace/dev configured
 configmap/app-config configured
-secret/app-db-secret configured
 deployment.apps/backend created
 deployment.apps/frontend created
 service/backend-service created
@@ -837,30 +870,29 @@ service/frontend-service created
 ingress.networking.k8s.io/app-ingress created
 ```
 
-### 7.3 Watch pods come up
+### 7.4 Watch pods come up
 
 ```powershell
 kubectl get pods -n dev -w
 # Press Ctrl+C when all pods show 1/1 Running
 ```
 
-The first time this runs, the pods will be in `ContainerCreating` or `Init` state — they are pulling the ECR images. Once the Jenkins pipeline has run and pushed images (Step 9), they will start. If you are applying manifests before the first pipeline run, the pods will stay in `ErrImagePull` until images exist in ECR — that is expected.
+> **Pod in ContainerCreating?** `kubectl describe pod <name> -n dev` — look at Events section.
+>
+> **Pod in CrashLoopBackOff?** `kubectl logs <name> -n dev` — look at the Java exception.
 
-> **Pod in CrashLoopBackOff?** `kubectl logs <name> -n dev` — look for the Java exception. Most common cause: `SchemaManagementException` means the database schema hasn't been applied yet. Flyway runs on startup and creates the schema automatically from `V1__init_schema.sql`. If it still crashes, verify `DB_HOST` in the ConfigMap matches the actual RDS endpoint.
-
-### 7.4 Get the ALB address and test the app
+### 7.5 Get the ALB address and test the app
 
 ```powershell
-# Wait 2-3 minutes for the ALB to be provisioned after ingress is applied
+# Wait 2-3 minutes for the ALB to be provisioned
 kubectl get ingress app-ingress -n dev
 
-# Once the ADDRESS column shows a hostname, test the API:
+# Once ADDRESS column shows a hostname, test the API
 $ALB = kubectl get ingress app-ingress -n dev `
     -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
 
 Write-Host "App URL: http://$ALB"
-
-# Test the API
+Write-Host "API test:"
 (Invoke-WebRequest -Uri "http://$ALB/api/products" -UseBasicParsing).Content
 ```
 
@@ -877,7 +909,7 @@ Write-Host "Open in browser: http://$JENKINS_DNS"
 
 Open that URL in Chrome or Edge.
 
-> **HTTP vs HTTPS:** For this lab, the Jenkins ALB runs on HTTP (port 80) because `acm_certificate_arn` is blank in `terraform.tfvars`. The HTTPS listener is only created when you supply a certificate ARN. For production: request a free ACM certificate via **AWS Console → Certificate Manager → Request → public certificate**, then add `acm_certificate_arn = "arn:aws:acm:ap-south-1:ACCOUNT:certificate/UUID"` to your `terraform.tfvars` and re-run `terraform apply`.
+> **HTTP vs HTTPS:** For this lab the Jenkins ALB runs on HTTP (port 80) because `acm_certificate_arn` defaults to `""` in `terraform.tfvars`. The HTTP listener still redirects to port 443 in the config, but since no HTTPS listener is provisioned, just use `http://`. For a real MNC production setup, request a free ACM certificate in the AWS Console (`Certificate Manager → Request → public certificate`), then add `acm_certificate_arn = "arn:aws:acm:ap-south-1:ACCOUNT:certificate/UUID"` to your `terraform.tfvars` file and re-run `terraform apply` — the HTTPS listener will be created automatically.
 
 ### 8.2 Get the initial admin password
 
@@ -892,21 +924,14 @@ aws ssm get-parameter `
 
 Paste this into the Jenkins unlock screen.
 
-> **Parameter not found yet?** The EC2 user data script takes 5–8 minutes after instance creation. To check progress:
+> **Parameter not found yet?** The EC2 user data script takes 5–8 minutes after instance creation. Wait and retry. To check progress, go to **AWS Console → Systems Manager → Run Command** or:
 > ```powershell
-> # Get Jenkins instance ID
-> $JENKINS_ID = aws ec2 describe-instances `
->     --filters "Name=tag:Name,Values=mnc-app-jenkins-master" `
->     --query "Reservations[0].Instances[0].InstanceId" `
->     --output text --region ap-south-1
->
-> # Check setup log via SSM Run Command
 > aws ssm send-command `
 >     --instance-ids $JENKINS_ID `
 >     --document-name "AWS-RunShellScript" `
->     --parameters "commands=['tail -50 /var/log/jenkins-setup.log']" `
->     --region ap-south-1 --query "Command.CommandId" --output text
-> # Then check: AWS Console → Systems Manager → Run Command → most recent command → Output
+>     --parameters "commands=['tail -30 /var/log/jenkins-setup.log']" `
+>     --region ap-south-1 | Out-Null
+> # Check output in AWS Console → Systems Manager → Run Command → latest command
 > ```
 
 ### 8.3 Install suggested plugins + additional plugins
@@ -915,17 +940,17 @@ On the **Customize Jenkins** screen → **Install suggested plugins** (takes ~5 
 
 After restart, go to **Manage Jenkins → Plugins → Available plugins** and install each of these:
 
-| Search for this          | Why                                  |
-|--------------------------|--------------------------------------|
-| `Pipeline`               | Jenkinsfile support                  |
-| `Docker Pipeline`        | `docker.build` / `docker.push` steps |
-| `SonarQube Scanner`      | `withSonarQubeEnv` + `waitForQualityGate` |
-| `GitHub`                 | Webhook triggers                     |
-| `Timestamper`            | Timestamps on log lines              |
-| `AnsiColor`              | Coloured console output              |
-| `JaCoCo`                 | Code coverage reports                |
+| Search for this | Why |
+|---|---|
+| `Pipeline` | Jenkinsfile support |
+| `Docker Pipeline` | docker.build / docker.push steps |
+| `SonarQube Scanner` | withSonarQubeEnv + waitForQualityGate |
+| `GitHub` | Webhook triggers |
+| `Timestamper` | Timestamps on log lines |
+| `AnsiColor` | Coloured console output |
+| `JaCoCo` | Code coverage reports |
 
-After installing → **Restart Jenkins** (or navigate to `http://<JENKINS_DNS>/restart`).
+After installing → **Restart Jenkins** (or open `http://<JENKINS_DNS>/restart`).
 
 ### 8.4 Create a GitHub Personal Access Token
 
@@ -941,40 +966,26 @@ After installing → **Restart Jenkins** (or navigate to `http://<JENKINS_DNS>/r
 
 **GitHub credential:**
 
-| Field    | Value                        |
-|----------|------------------------------|
-| Kind     | `Username with password`     |
-| Username | your GitHub username         |
-| Password | the GitHub token from 8.4    |
-| ID       | `github-credentials`         |
+| Field | Value |
+|---|---|
+| Kind | `Username with password` |
+| Username | your GitHub username |
+| Password | the GitHub token from 8.4 |
+| ID | `github-credentials` |
 
 **SonarQube token** (add after completing Step 8.6):
 
-| Field  | Value                    |
-|--------|--------------------------|
-| Kind   | `Secret text`            |
-| Secret | token from SonarQube     |
-| ID     | `sonarqube-token`        |
+| Field | Value |
+|---|---|
+| Kind | `Secret text` |
+| Secret | token from SonarQube |
+| ID | `sonarqube-token` |
 
 ### 8.6 Access SonarQube via SSM port-forwarding tunnel
 
-SonarQube runs on port 9000 on the Jenkins EC2's private IP. You reach it by tunnelling through AWS Systems Manager — no open inbound ports needed.
+SonarQube runs on port 9000 on the Jenkins EC2 private IP. You reach it by tunnelling through SSM.
 
-**Install the SSM Session Manager plugin for Windows (one-time):**
-
-```powershell
-Invoke-WebRequest `
-    -Uri "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/windows/SessionManagerPluginSetup.exe" `
-    -OutFile "$env:TEMP\SSMPlugin.exe" `
-    -UseBasicParsing
-
-# Requires Admin PowerShell
-Start-Process "$env:TEMP\SSMPlugin.exe" -Wait -Verb RunAs
-
-Write-Host "SSM plugin installed. Close and reopen PowerShell." -ForegroundColor Green
-```
-
-**After reopening PowerShell — open an SSM tunnel in a dedicated PowerShell window.** Keep this window open the entire time you use SonarQube:
+**Open a second PowerShell window** and run (keep this window open the entire time you use SonarQube):
 
 ```powershell
 $JENKINS_ID = aws ec2 describe-instances `
@@ -997,19 +1008,17 @@ Generate the Jenkins analysis token:
 1. Top-right corner → click **admin** → **My Account**
 2. **Security** tab → **Generate Tokens**
 3. Name: `jenkins-token`, Type: **Global Analysis Token**
-4. Copy the token → add it to Jenkins credentials as `sonarqube-token` (Step 8.5)
+4. Copy the token → add it to Jenkins credentials as `sonarqube-token` (from Step 8.5)
 
 ### 8.7 Configure SonarQube server in Jenkins
 
 **Manage Jenkins → System** → scroll to **SonarQube servers** → **Add SonarQube**:
 
-| Field              | Value                      |
-|--------------------|----------------------------|
-| Name               | `SonarQube-Server`         |
-| Server URL         | `http://localhost:9000`    |
-| Server auth token  | select `sonarqube-token`   |
-
-> The name `SonarQube-Server` must match **exactly** — the Jenkinsfile references it with `withSonarQubeEnv('SonarQube-Server')`.
+| Field | Value |
+|---|---|
+| Name | `SonarQube-Server` ← must match Jenkinsfile exactly |
+| Server URL | `http://localhost:9000` |
+| Server auth token | select `sonarqube-token` |
 
 Save.
 
@@ -1018,11 +1027,11 @@ Save.
 **Manage Jenkins → Tools**:
 
 **JDK installations → Add JDK:**
-- Name: `Java-17` ← must match exactly — Jenkinsfile uses `jdk 'Java-17'`
+- Name: `Java-17` ← must match exactly
 - Install automatically: checked, Version: Java 17
 
 **Maven installations → Add Maven:**
-- Name: `Maven-3.9` ← must match exactly — Jenkinsfile uses `maven 'Maven-3.9'`
+- Name: `Maven-3.9` ← must match exactly
 - Install automatically: checked, Version: 3.9.6
 
 Save.
@@ -1040,15 +1049,15 @@ Save.
 
 Jenkins immediately scans and discovers `main` and `develop` branches.
 
-### 8.10 GitHub webhook (makes builds instant instead of polling every minute)
+### 8.10 GitHub webhook (makes builds instant instead of polling)
 
 In your GitHub repo: **Settings → Webhooks → Add webhook**
 
-| Field        | Value                                         |
-|--------------|-----------------------------------------------|
-| Payload URL  | `http://<JENKINS_ALB_DNS>/github-webhook/`    |
-| Content type | `application/json`                            |
-| Events       | Just the push event                           |
+| Field | Value |
+|---|---|
+| Payload URL | `http://<JENKINS_ALB_DNS>/github-webhook/` |
+| Content type | `application/json` |
+| Events | Just the push event |
 
 ---
 
@@ -1073,16 +1082,16 @@ In Jenkins → **mnc-app-pipeline → develop** → watch stages execute.
 ### 9.2 What you should see in order
 
 ```
- Checkout            → prints branch, git SHA, target environment
- Build & Unit Tests  → mvn clean install, JUnit results published, coverage check
- SonarQube Analysis  → sends code to SonarQube for analysis
- Quality Gate        → waits for SonarQube pass/fail (up to 10 min)
- Docker Build & Push → builds both images, tags sha-xxxxxx, pushes to ECR
- Deploy → DEV        → injects DB secret, kubectl apply, waits for rollout
- Smoke Tests         → hits /actuator/health and /api/products, confirms HTTP 200
+ Checkout            - prints branch, git SHA, target environment
+ Build & Unit Tests  - mvn clean install, JUnit results published
+ SonarQube Analysis  - sends code to SonarQube for analysis
+ Quality Gate        - waits for SonarQube pass/fail (up to 10 min)
+ Docker Build & Push - builds both images, tags sha-xxxxxx, pushes to ECR
+ Deploy to DEV       - kubectl apply to dev namespace, waits for rollout
+ Smoke Tests         - hits /actuator/health, confirms HTTP 200
 ```
 
-First run takes ~10 minutes (Maven downloads dependencies to local cache). Subsequent runs: ~4–5 minutes.
+First run takes ~10 minutes (Maven downloads dependencies). Subsequent runs: ~4–5 minutes.
 
 ### 9.3 Test the staging approval gate
 
@@ -1101,7 +1110,7 @@ git merge release/1.0.0
 git push origin main
 ```
 
-Jenkins pauses twice — Tech Lead approval, then DevOps Manager approval. In the lab you click both.
+Jenkins pauses twice — Tech Lead approval, then DevOps Manager approval. In the lab, you click both.
 
 ---
 
@@ -1109,46 +1118,16 @@ Jenkins pauses twice — Tech Lead approval, then DevOps Manager approval. In th
 
 ### 10.1 Staging infrastructure
 
-Staging uses the same two-pass apply as dev.
-
 ```powershell
 Set-Location "C:\Projects\mnc-devops-project\infra\environments\staging"
-
 terraform init
+terraform apply -var-file="terraform.tfvars" -var="db_password=StagingPass123!" -auto-approve
 
-# Pass 1 — AWS infrastructure only
-terraform apply `
-    -target="module.staging.module.vpc" `
-    -target="module.staging.module.jenkins" `
-    -target="module.staging.module.eks" `
-    -target="module.staging.module.rds" `
-    -target="module.staging.aws_security_group.alb" `
-    -target="module.staging.aws_ssm_parameter.db_host" `
-    -target="module.staging.aws_ssm_parameter.db_name" `
-    -target="module.staging.aws_ssm_parameter.db_password" `
-    -target="module.staging.aws_ssm_parameter.ecr_registry" `
-    -var-file="terraform.tfvars" `
-    -var="db_password=StagingPass123!"
-
-# Wait for EKS nodes to be Ready
-aws eks update-kubeconfig --region ap-south-1 --name mnc-app-staging-cluster
-kubectl get nodes -w
-# Ctrl+C when all nodes show Ready
-
-# Pass 2 — full apply (creates the Kubernetes namespace)
-terraform apply `
-    -var-file="terraform.tfvars" `
-    -var="db_password=StagingPass123!"
-```
-
-Update staging ConfigMap and deploy manifests:
-
-```powershell
+# Update configmap with staging RDS endpoint
 Set-Location "C:\Projects\mnc-devops-project"
-
-$S_RDS = (terraform -chdir="infra\environments\staging" output -raw db_endpoint) -replace ":3306", ""
+$S_RDS = (terraform -chdir="infra\environments\staging" output -raw db_endpoint) -replace ":3306",""
 $cm    = Get-Content "k8s\staging\configmap.yaml" -Raw
-$cm    = $cm -replace "mnc-app-staging-mysql\.[a-zA-Z0-9]+\.ap-south-1\.rds\.amazonaws\.com", $S_RDS
+$cm    = $cm -replace "mnc-app-staging-mysql\.xxxxxxxxxx\.ap-south-1\.rds\.amazonaws\.com", $S_RDS
 Set-Content "k8s\staging\configmap.yaml" $cm -NoNewline
 
 # Inject secret and apply manifests
@@ -1166,48 +1145,20 @@ kubectl get pods -n staging -w
 
 ```powershell
 Set-Location "C:\Projects\mnc-devops-project\infra\environments\prod"
-
 terraform init
+terraform apply -var-file="terraform.tfvars" -var="db_password=ProdPass456!" -auto-approve
 
-# Pass 1 — AWS infrastructure only
-terraform apply `
-    -target="module.prod.module.vpc" `
-    -target="module.prod.module.jenkins" `
-    -target="module.prod.module.eks" `
-    -target="module.prod.module.rds" `
-    -target="module.prod.aws_security_group.alb" `
-    -target="module.prod.aws_ssm_parameter.db_host" `
-    -target="module.prod.aws_ssm_parameter.db_name" `
-    -target="module.prod.aws_ssm_parameter.db_password" `
-    -target="module.prod.aws_ssm_parameter.ecr_registry" `
-    -var-file="terraform.tfvars" `
-    -var="db_password=ProdPass456!"
-
-# Wait for EKS nodes to be Ready
-aws eks update-kubeconfig --region ap-south-1 --name mnc-app-prod-cluster
-kubectl get nodes -w
-# Ctrl+C when all nodes show Ready
-
-# Pass 2 — full apply
-terraform apply `
-    -var-file="terraform.tfvars" `
-    -var="db_password=ProdPass456!"
-```
-
-Before applying prod manifests, update the prod ingress with your real domain and ACM cert:
-
-```powershell
 Set-Location "C:\Projects\mnc-devops-project"
-
-$P_RDS = (terraform -chdir="infra\environments\prod" output -raw db_endpoint) -replace ":3306", ""
+$P_RDS = (terraform -chdir="infra\environments\prod" output -raw db_endpoint) -replace ":3306",""
 $cm    = Get-Content "k8s\prod\configmap.yaml" -Raw
-$cm    = $cm -replace "mnc-app-prod-mysql\.[a-zA-Z0-9]+\.ap-south-1\.rds\.amazonaws\.com", $P_RDS
+$cm    = $cm -replace "mnc-app-prod-mysql\.xxxxxxxxxx\.ap-south-1\.rds\.amazonaws\.com", $P_RDS
 Set-Content "k8s\prod\configmap.yaml" $cm -NoNewline
 
-# Edit prod ingress — replace domain + ACM cert ARN before applying
+# Update prod ingress: replace domain + ACM cert ARN before applying
+# Edit k8s\prod\services-ingress.yaml in Notepad:
+#   host: app.mnc-company.com         -> your real domain
+#   certificate-arn: ...REPLACE-ME    -> your ACM cert ARN
 notepad "k8s\prod\services-ingress.yaml"
-# Change: host: app.mnc-company.com      → your real domain
-# Change: certificate-arn: ...REPLACE-ME → your ACM cert ARN
 ```
 
 After editing:
@@ -1238,35 +1189,31 @@ kubectl get pods -n prod
 ### View logs
 
 ```powershell
-# Follow backend logs in dev (live stream — Ctrl+C to stop)
+# Follow backend logs in dev
 kubectl logs -f deployment/backend -n dev
 
 # Last 100 lines from prod
 kubectl logs deployment/backend -n prod --tail=100
 
-# Logs from a specific pod
+# Specific pod
 kubectl logs <pod-name> -n prod
 ```
 
 ### Roll back a broken prod deployment
 
 ```powershell
-# See revision history (each Jenkins deploy = one revision)
-kubectl rollout history deployment/backend  -n prod
-kubectl rollout history deployment/frontend -n prod
-
-# Roll back both deployments to the previous version
-kubectl rollout undo deployment/backend  -n prod
+kubectl rollout history deployment/backend  -n prod   # see revision numbers
+kubectl rollout undo deployment/backend  -n prod       # roll back to previous
 kubectl rollout undo deployment/frontend -n prod
 
 # Watch rollback progress
-kubectl rollout status deployment/backend  -n prod
+kubectl rollout status deployment/backend -n prod
 
 # Confirm which image is now running
 kubectl get pods -n prod -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[0].image}{"\n"}{end}'
 ```
 
-### Scale manually (emergency override of HPA)
+### Scale manually
 
 ```powershell
 kubectl scale deployment backend --replicas=5 -n prod
@@ -1281,9 +1228,8 @@ kubectl top nodes
 
 ### Destroy when done practicing (saves cost)
 
-Always delete Kubernetes resources first, then run terraform destroy:
-
 ```powershell
+# Always delete K8s resources first, then run terraform destroy
 kubectl delete -f k8s\dev\
 
 Set-Location "infra\environments\dev"
@@ -1291,7 +1237,6 @@ terraform destroy `
     -var-file="terraform.tfvars" `
     -var="db_password=DevPass123!"
 # Type 'yes' when prompted
-
 Set-Location "C:\Projects\mnc-devops-project"
 ```
 
@@ -1308,43 +1253,13 @@ $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";"
 terraform version
 ```
 
-If still not found, close all PowerShell windows and open a fresh one.
-
-### "Error: Get https://<endpoint>/api/v1/namespaces: dial tcp: connection refused"
-
-You ran a single `terraform apply` instead of the two-pass approach. Fix:
-
-```powershell
-# Remove the Kubernetes provider's cached state
-Remove-Item -Recurse -Force "infra\environments\dev\.terraform"
-Remove-Item -Force "infra\environments\dev\.terraform.lock.hcl" -ErrorAction SilentlyContinue
-
-Set-Location "infra\environments\dev"
-terraform init
-
-# Then follow Step 5 Pass 1 → wait for nodes → Pass 2
-```
-
-### "error: Unauthorized" when Jenkins runs kubectl
-
-This means the Jenkins IAM role is not in the EKS aws-auth ConfigMap. Verify:
-
-```powershell
-kubectl describe configmap aws-auth -n kube-system
-```
-
-The `mapRoles` section should have an entry with `jenkins` username. If it is missing, the aws-auth update in the EKS Terraform module did not apply. Re-run Pass 2:
-
-```powershell
-Set-Location "infra\environments\dev"
-terraform apply -var-file="terraform.tfvars" -var="db_password=DevPass123!"
-```
+If still not found, close all PowerShell windows and open a new one.
 
 ### "Pods stuck in Pending"
 
 ```powershell
 kubectl describe pod <pod-name> -n dev
-# Look at the "Events:" section at the bottom
+# Look at "Events:" at the bottom
 ```
 
 | Events message | Fix |
@@ -1361,21 +1276,16 @@ aws iam list-attached-role-policies `
     --role-name mnc-app-dev-eks-node-role `
     --query "AttachedPolicies[].PolicyName"
 # Must include: AmazonEC2ContainerRegistryReadOnly
-
-# Verify images exist in ECR
-aws ecr list-images --repository-name mnc-app/backend --region ap-south-1
 ```
-
-If no images exist: the pipeline hasn't pushed them yet. Run Step 9.1 first.
 
 ### "SonarQube Quality Gate FAILED"
 
-Open `http://localhost:9000` (SSM tunnel must be running in a separate window) → Projects → mnc-app → look at the Quality Gate status.
+Open `http://localhost:9000` (SSM tunnel must be running) → Projects → mnc-app → look at the Quality Gate status.
 
 | Failure | Fix |
 |---|---|
 | Line coverage below 70% | Add unit tests in `ProductServiceTest.java` |
-| Bugs or Code Smells | Fix the issues flagged in the SonarQube UI |
+| Bugs or Code Smells | Fix the issues flagged in SonarQube UI |
 | Reliability rating D | Usually null pointer risks — fix in code |
 
 ### "ALB stuck at pending after ingress apply"
@@ -1396,24 +1306,36 @@ aws ec2 describe-instances `
     --query "Reservations[0].Instances[0].State.Name" `
     --output text
 
-# If running, check SSM agent is registered:
-# AWS Console → Systems Manager → Fleet Manager → your instance should appear.
-# If missing: check the Jenkins IAM role has AmazonSSMManagedInstanceCore attached.
+# Check SSM agent is registered
+# AWS Console → Systems Manager → Fleet Manager → your instance should appear
+# If not: check the Jenkins IAM role has AmazonSSMManagedInstanceCore
 ```
 
-### "Pods crash on startup — SchemaManagementException: Missing table"
+### "Pods crash immediately with secret app-db-secret not found"
 
-This means Flyway has not yet run the migration. Flyway runs automatically on app startup via the dependency in `pom.xml`. If it fails, check the pod logs:
+This means the Kubernetes Secret was not injected before the pod tried to start. The Jenkinsfile `deployToEnvironment()` function injects it automatically during a pipeline run, but if you applied manifests manually, run this first:
 
 ```powershell
-kubectl logs <pod-name> -n dev | grep -i flyway
-```
+$ENV_NAME = "dev"   # change to staging or prod as needed
+$DB_PASS = aws ssm get-parameter `
+    --name "/mnc-app/$ENV_NAME/db/password" `
+    --with-decryption --query "Parameter.Value" --output text --region ap-south-1
 
-Common causes: DB_HOST in ConfigMap is wrong (stale placeholder), or the DB is not reachable (security group issue between EKS nodes and RDS).
+kubectl create secret generic app-db-secret `
+    "--from-literal=DB_PASSWORD=$DB_PASS" `
+    --namespace=$ENV_NAME `
+    --dry-run=client -o yaml | kubectl apply -f -
+
+Remove-Variable DB_PASS
+kubectl rollout restart deployment/backend -n $ENV_NAME
+```
 
 ### "terraform init fails — Backend configuration changed"
 
+This happens when you have a stale `.terraform/` folder from a previous init with different backend settings. Fix:
+
 ```powershell
+# Delete the cached backend config and reinitialise
 Remove-Item -Recurse -Force "infra\environments\dev\.terraform"
 Remove-Item -Force "infra\environments\dev\.terraform.lock.hcl" -ErrorAction SilentlyContinue
 
@@ -1450,37 +1372,15 @@ Approximate for `ap-south-1`, running **8 hours/day** (study sessions):
 **Biggest cost saving tip — destroy when not in use:**
 
 ```powershell
-# End of study session (~10 minutes)
+# End of study session (10 min)
 kubectl delete -f k8s\dev\
 terraform -chdir="infra\environments\dev" destroy `
     -var-file="terraform.tfvars" -var="db_password=DevPass123!" -auto-approve
 
-# Start of next session (~20 minutes — two-pass apply required again)
-# Pass 1
+# Start of next session (20 min)
 terraform -chdir="infra\environments\dev" apply `
-    -target="module.dev.module.vpc" `
-    -target="module.dev.module.jenkins" `
-    -target="module.dev.module.ecr" `
-    -target="module.dev.module.eks" `
-    -target="module.dev.module.rds" `
-    -target="module.dev.aws_security_group.alb" `
-    -target="module.dev.aws_ssm_parameter.db_host" `
-    -target="module.dev.aws_ssm_parameter.db_name" `
-    -target="module.dev.aws_ssm_parameter.db_password" `
-    -target="module.dev.aws_ssm_parameter.ecr_registry" `
-    -var-file="infra\environments\dev\terraform.tfvars" `
-    -var="db_password=DevPass123!" -auto-approve
-
-# Wait for nodes
+    -var-file="terraform.tfvars" -var="db_password=DevPass123!" -auto-approve
 aws eks update-kubeconfig --region ap-south-1 --name mnc-app-dev-cluster
-kubectl get nodes -w
-
-# Pass 2
-terraform -chdir="infra\environments\dev" apply `
-    -var-file="infra\environments\dev\terraform.tfvars" `
-    -var="db_password=DevPass123!" -auto-approve
-
-# Redeploy K8s manifests
 kubectl apply -f k8s\dev\
 ```
 
@@ -1501,39 +1401,22 @@ kubectl rollout undo deployment/backend -n prod          # rollback
 kubectl rollout status deployment/backend -n prod        # rollout progress
 kubectl top pods -n prod                                 # CPU/memory usage
 kubectl top nodes                                        # node usage
-kubectl describe configmap aws-auth -n kube-system       # verify Jenkins RBAC mapping
 
 # ── terraform ─────────────────────────────────────────────────────────────
-# Pass 1 (first time or after destroy)
-terraform apply -target="module.dev.module.vpc" -target="module.dev.module.jenkins" `
-    -target="module.dev.module.ecr" -target="module.dev.module.eks" `
-    -target="module.dev.module.rds" -target="module.dev.aws_security_group.alb" `
-    -target="module.dev.aws_ssm_parameter.db_host" `
-    -target="module.dev.aws_ssm_parameter.db_name" `
-    -target="module.dev.aws_ssm_parameter.db_password" `
-    -target="module.dev.aws_ssm_parameter.ecr_registry" `
-    -var-file="terraform.tfvars" -var="db_password=DevPass123!"
-
-# Pass 2 (after nodes are Ready)
-terraform apply -var-file="terraform.tfvars" -var="db_password=DevPass123!"
-
-terraform destroy -var-file="terraform.tfvars" -var="db_password=DevPass123!"
+terraform plan    -var-file="terraform.tfvars" -var="db_password=X"
+terraform apply   -var-file="terraform.tfvars" -var="db_password=X"
+terraform destroy -var-file="terraform.tfvars" -var="db_password=X"
 terraform output                                          # all outputs
 
 # ── aws ───────────────────────────────────────────────────────────────────
-# Reconnect kubectl after restarting PowerShell or after a new deploy
+# Reconnect kubectl after restarting PowerShell
 aws eks update-kubeconfig --region ap-south-1 --name mnc-app-dev-cluster
 
 # Get Jenkins initial password
 aws ssm get-parameter --name "/mnc-app/jenkins/initial-password" `
     --with-decryption --query "Parameter.Value" --output text --region ap-south-1
 
-# Check EKS node status
-aws eks describe-nodegroup --cluster-name mnc-app-dev-cluster `
-    --nodegroup-name mnc-app-dev-nodes --region ap-south-1 `
-    --query "nodegroup.status"
-
-# ── SSM tunnel for SonarQube (run in a SEPARATE PowerShell window, keep it open) ──
+# ── SSM tunnel for SonarQube (run in a separate PowerShell window) ─────────
 $JENKINS_ID = aws ec2 describe-instances `
     --filters "Name=tag:Name,Values=mnc-app-jenkins-master" `
     --query "Reservations[0].Instances[0].InstanceId" `

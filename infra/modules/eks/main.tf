@@ -4,7 +4,7 @@
 #   - EKS control plane
 #   - Managed node groups (one per environment)
 #   - OIDC provider for IRSA (IAM Roles for Service Accounts)
-#   - aws-auth ConfigMap for Jenkins access
+#   - aws-auth ConfigMap so Jenkins IAM role can run kubectl
 # ─────────────────────────────────────────────
 
 # ── IAM Role for EKS control plane ──────────────────────────────────────
@@ -187,7 +187,7 @@ resource "aws_eks_node_group" "main" {
   tags = merge(var.tags, {
     Name = "${var.project_name}-${var.environment}-node-group"
     # Required for Cluster Autoscaler to discover this node group
-    "k8s.io/cluster-autoscaler/enabled"           = "true"
+    "k8s.io/cluster-autoscaler/enabled"             = "true"
     "k8s.io/cluster-autoscaler/${var.cluster_name}" = "owned"
   })
 
@@ -198,37 +198,83 @@ resource "aws_eks_node_group" "main" {
   ]
 }
 
+# ── aws-auth ConfigMap ────────────────────────────────────────────────────
+# CRITICAL: Without this, the Jenkins EC2 IAM role cannot run kubectl commands.
+# EKS has two separate permission layers:
+#   Layer 1 — AWS IAM: controls who can call eks:DescribeCluster, eks:GetToken
+#   Layer 2 — Kubernetes RBAC: controls what that identity can DO inside the cluster
+# The aws-auth ConfigMap bridges layer 1 → layer 2.
+# We map the Jenkins IAM role to system:masters so it can deploy to any namespace.
+#
+# In production you would create a narrower role (e.g. only deploy to dev/staging/prod
+# namespaces) and bind it with a ClusterRole/RoleBinding instead of system:masters.
+resource "kubernetes_config_map_v1_data" "aws_auth" {
+  metadata {
+    name      = "aws-auth"
+    namespace = "kube-system"
+  }
+
+  # force = true means: if the ConfigMap already has data (AWS creates a default one
+  # for node groups), merge our entries rather than overwrite entirely.
+  force = true
+
+  data = {
+    mapRoles = yamlencode([
+      # Node group role — EKS requires this for worker nodes to join the cluster
+      {
+        rolearn  = aws_iam_role.node_group.arn
+        username = "system:node:{{EC2PrivateDNSName}}"
+        groups   = ["system:bootstrappers", "system:nodes"]
+      },
+      # Jenkins role — allows the Jenkins EC2 to run kubectl commands
+      # Jenkins authenticates using its EC2 instance profile IAM role.
+      # We bind it to system:masters which gives full cluster admin access.
+      {
+        rolearn  = var.jenkins_role_arn
+        username = "jenkins"
+        groups   = ["system:masters"]
+      }
+    ])
+  }
+
+  depends_on = [aws_eks_cluster.main, aws_eks_node_group.main]
+}
+
 # ── EKS Add-ons (coredns, kube-proxy, vpc-cni) ──────────────────────────
 resource "aws_eks_addon" "coredns" {
-  cluster_name      = aws_eks_cluster.main.name
-  addon_name        = "coredns"
-  #resolve_conflicts = "OVERWRITE"
-  tags              = var.tags
-  depends_on        = [aws_eks_node_group.main]
+  cluster_name                = aws_eks_cluster.main.name
+  addon_name                  = "coredns"
+  resolve_conflicts_on_create = "OVERWRITE"
+  resolve_conflicts_on_update = "OVERWRITE"
+  tags                        = var.tags
+  depends_on                  = [aws_eks_node_group.main]
 }
 
 resource "aws_eks_addon" "kube_proxy" {
-  cluster_name      = aws_eks_cluster.main.name
-  addon_name        = "kube-proxy"
-  #resolve_conflicts = "OVERWRITE"
-  tags              = var.tags
+  cluster_name                = aws_eks_cluster.main.name
+  addon_name                  = "kube-proxy"
+  resolve_conflicts_on_create = "OVERWRITE"
+  resolve_conflicts_on_update = "OVERWRITE"
+  tags                        = var.tags
 }
 
 resource "aws_eks_addon" "vpc_cni" {
-  cluster_name      = aws_eks_cluster.main.name
-  addon_name        = "vpc-cni"
-  #resolve_conflicts = "OVERWRITE"
-  tags              = var.tags
+  cluster_name                = aws_eks_cluster.main.name
+  addon_name                  = "vpc-cni"
+  resolve_conflicts_on_create = "OVERWRITE"
+  resolve_conflicts_on_update = "OVERWRITE"
+  tags                        = var.tags
 }
 
 resource "aws_eks_addon" "ebs_csi" {
   # Needed for persistent volumes (RDS alternatives, stateful apps)
-  cluster_name             = aws_eks_cluster.main.name
-  addon_name               = "aws-ebs-csi-driver"
-  #resolve_conflicts        = "OVERWRITE"
-  service_account_role_arn = aws_iam_role.ebs_csi.arn
-  tags                     = var.tags
-  depends_on               = [aws_eks_node_group.main]
+  cluster_name                = aws_eks_cluster.main.name
+  addon_name                  = "aws-ebs-csi-driver"
+  resolve_conflicts_on_create = "OVERWRITE"
+  resolve_conflicts_on_update = "OVERWRITE"
+  service_account_role_arn    = aws_iam_role.ebs_csi.arn
+  tags                        = var.tags
+  depends_on                  = [aws_eks_node_group.main]
 }
 
 # ── IRSA Role for EBS CSI driver ─────────────────────────────────────────

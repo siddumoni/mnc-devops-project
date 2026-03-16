@@ -62,6 +62,22 @@
             <optional>true</optional>
         </dependency>
 
+        <!--
+            Flyway — database migration tool.
+            On app startup, Flyway checks the 'flyway_schema_history' table and
+            applies any pending SQL scripts from src/main/resources/db/migration/.
+            This is how the schema.sql in app/database/ gets applied automatically.
+            The Jenkins pipeline also runs 'mvn flyway:migrate' before each deploy
+            to apply migrations before the new pod starts.
+
+            NOTE: Flyway replaces the manual schema apply in Step 7.2 of the README.
+            You no longer need to run schema.sql via SSM Run Command.
+        -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-mysql</artifactId>
+        </dependency>
+
         <!-- H2 — in-memory DB for unit tests (no MySQL needed in CI) -->
         <dependency>
             <groupId>com.h2database</groupId>
@@ -107,6 +123,22 @@
                         <goals><goal>report</goal></goals>
                     </execution>
                 </executions>
+            </plugin>
+
+            <!-- Flyway Maven plugin — used by Jenkins pipeline to run migrations -->
+            <!-- mvn flyway:migrate -Dflyway.url=... -Dflyway.user=... -Dflyway.password=... -->
+            <plugin>
+                <groupId>org.flywaydb</groupId>
+                <artifactId>flyway-maven-plugin</artifactId>
+                <configuration>
+                    <!-- These are overridden by Jenkins via -D flags at runtime -->
+                    <url>jdbc:mysql://${DB_HOST}:3306/${DB_NAME}?useSSL=true&amp;serverTimezone=UTC</url>
+                    <user>${DB_USERNAME}</user>
+                    <password>${DB_PASSWORD}</password>
+                    <locations>
+                        <location>filesystem:../../database/migration</location>
+                    </locations>
+                </configuration>
             </plugin>
 
             <!-- SonarQube scanner -->

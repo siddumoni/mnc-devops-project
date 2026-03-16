@@ -46,7 +46,7 @@ module "vpc" {
 }
 
 # ── Module: Jenkins EC2 ───────────────────────────────────────────────────
-# Jenkins is created BEFORE EKS so we can pass its SG ID to EKS.
+# Jenkins is created BEFORE EKS so we can pass its role ARN and SG ID to EKS.
 module "jenkins" {
   source = "./modules/ec2-jenkins"
 
@@ -81,48 +81,9 @@ module "ecr" {
   tags              = local.common_tags
 }
 
-# ── Module: EKS ───────────────────────────────────────────────────────────
-module "eks" {
-  source = "./modules/eks"
-
-  project_name        = var.project_name
-  environment         = var.environment
-  cluster_name        = local.cluster_name
-  kubernetes_version  = var.kubernetes_version
-  vpc_id              = module.vpc.vpc_id
-  public_subnet_ids   = module.vpc.public_subnet_ids
-  private_subnet_ids  = module.vpc.private_subnet_ids
-  jenkins_sg_id       = module.jenkins.jenkins_security_group_id
-  alb_sg_id           = aws_security_group.alb.id
-  ec2_key_name        = var.ec2_key_name
-  node_instance_types = var.node_instance_types
-  capacity_type       = var.capacity_type
-  desired_nodes       = var.desired_nodes
-  min_nodes           = var.min_nodes
-  max_nodes           = var.max_nodes
-  allowed_cidr_blocks = var.allowed_cidr_blocks
-  tags                = local.common_tags
-}
-
-# ── Module: RDS ───────────────────────────────────────────────────────────
-module "rds" {
-  source = "./modules/rds"
-
-  project_name       = var.project_name
-  environment        = var.environment
-  vpc_id             = module.vpc.vpc_id
-  private_subnet_ids = module.vpc.private_subnet_ids
-  eks_node_sg_id     = module.eks.node_security_group_id
-  jenkins_sg_id      = module.jenkins.jenkins_security_group_id
-  db_username        = var.db_username
-  db_password        = var.db_password
-  db_instance_class  = var.db_instance_class
-  allocated_storage  = var.db_storage
-  tags               = local.common_tags
-}
-
 # ── ALB Security Group ────────────────────────────────────────────────────
-# Used by the EKS AWS Load Balancer Controller to front app traffic.
+# Defined BEFORE module.eks so we can pass alb_sg_id to EKS node SG rules.
+# Terraform's dependency graph resolves this correctly regardless of file order.
 resource "aws_security_group" "alb" {
   name        = "${var.project_name}-${var.environment}-alb-sg"
   description = "Application Load Balancer for ${var.environment}"
@@ -156,8 +117,52 @@ resource "aws_security_group" "alb" {
   })
 }
 
+# ── Module: EKS ───────────────────────────────────────────────────────────
+module "eks" {
+  source = "./modules/eks"
+
+  project_name        = var.project_name
+  environment         = var.environment
+  cluster_name        = local.cluster_name
+  kubernetes_version  = var.kubernetes_version
+  vpc_id              = module.vpc.vpc_id
+  public_subnet_ids   = module.vpc.public_subnet_ids
+  private_subnet_ids  = module.vpc.private_subnet_ids
+  jenkins_sg_id       = module.jenkins.jenkins_security_group_id
+  alb_sg_id           = aws_security_group.alb.id
+  ec2_key_name        = var.ec2_key_name
+  node_instance_types = var.node_instance_types
+  capacity_type       = var.capacity_type
+  desired_nodes       = var.desired_nodes
+  min_nodes           = var.min_nodes
+  max_nodes           = var.max_nodes
+  allowed_cidr_blocks = var.allowed_cidr_blocks
+  # FIX: Pass Jenkins role ARN so aws-auth ConfigMap grants kubectl access
+  jenkins_role_arn    = module.jenkins.jenkins_role_arn
+  tags                = local.common_tags
+}
+
+# ── Module: RDS ───────────────────────────────────────────────────────────
+module "rds" {
+  source = "./modules/rds"
+
+  project_name       = var.project_name
+  environment        = var.environment
+  vpc_id             = module.vpc.vpc_id
+  private_subnet_ids = module.vpc.private_subnet_ids
+  eks_node_sg_id     = module.eks.node_security_group_id
+  jenkins_sg_id      = module.jenkins.jenkins_security_group_id
+  db_username        = var.db_username
+  db_password        = var.db_password
+  db_instance_class  = var.db_instance_class
+  allocated_storage  = var.db_storage
+  tags               = local.common_tags
+}
+
 # ── Kubernetes Namespace ──────────────────────────────────────────────────
 # Creates the environment namespace inside the shared EKS cluster.
+# NOTE: This requires EKS to exist. On first apply, use -target to create
+# infrastructure first, then run full apply. See README Step 5.
 resource "kubernetes_namespace" "env" {
   metadata {
     name = var.environment
