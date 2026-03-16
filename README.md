@@ -344,7 +344,7 @@ Paste this entire block into PowerShell. It auto-detects your account ID, IP, an
 ```powershell
 # Auto-detect values
 $ACCOUNT_ID = (aws sts get-caller-identity --query Account --output text)
-$MY_IP      = (Invoke-WebRequest -Uri "https://ifconfig.me" -UseBasicParsing).Content.Trim()
+$MY_IP = (Invoke-RestMethod -Uri "https://ifconfig.me/ip").Trim()
 $AMI_ID     = aws ec2 describe-images `
                   --owners amazon `
                   --filters "Name=name,Values=al2023-ami-2023*-x86_64" `
