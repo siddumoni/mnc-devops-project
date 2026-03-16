@@ -16,7 +16,7 @@ resource "aws_db_subnet_group" "main" {
 
 resource "aws_security_group" "rds" {
   name        = "${var.project_name}-${var.environment}-rds-sg"
-  description = "RDS MySQL — allow from EKS nodes only"
+  description = "RDS MySQL allow from EKS nodes only"
   vpc_id      = var.vpc_id
 
   ingress {
