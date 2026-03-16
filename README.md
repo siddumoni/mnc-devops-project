@@ -652,6 +652,10 @@ ip-10-10-11-xx.ap-south-1.compute.internal   Ready    <none>   2m
 Without this, applying `ingress.yaml` does nothing. This controller watches Ingress resources and creates real AWS ALBs.
 
 ```powershell
+# Fix the file:// path format for Windows
+# $env:TEMP on Windows gives C:\Users\...\AppData\Local\Temp
+# AWS CLI on Windows needs file:// with the drive letter directly — no leading slash
+
 Set-Location "C:\Projects\mnc-devops-project"
 
 $AWS_REGION   = "ap-south-1"
@@ -660,28 +664,29 @@ $CLUSTER_NAME = "mnc-app-dev-cluster"
 $POLICY_NAME  = "AWSLoadBalancerControllerIAMPolicy"
 $ROLE_NAME    = "mnc-app-dev-alb-controller-role"
 
-Write-Host "=== Installing ALB Controller ===" -ForegroundColor Cyan
+# ── [1/4] IAM Policy ──────────────────────────────────────────────────────
+Write-Host "[1/4] Creating IAM policy..." -ForegroundColor Yellow
 
-# [1/4] IAM Policy
-Write-Host "[1/4] IAM policy..." -ForegroundColor Yellow
-$pc = aws iam get-policy --policy-arn "arn:aws:iam::${ACCOUNT_ID}:policy/$POLICY_NAME" 2>&1
+$policyCheck = aws iam get-policy --policy-arn "arn:aws:iam::${ACCOUNT_ID}:policy/$POLICY_NAME" 2>&1
 if ($LASTEXITCODE -ne 0) {
     Invoke-WebRequest `
         -Uri "https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/main/docs/install/iam_policy.json" `
-        -OutFile "$env:TEMP\alb-policy.json" `
-        -UseBasicParsing | Out-Null
+        -OutFile "C:\Temp\alb-policy.json" `
+        -UseBasicParsing
 
+    # Windows fix: use file://C:\path format (no triple slash)
     aws iam create-policy `
         --policy-name $POLICY_NAME `
-        --policy-document "file:///$env:TEMP\alb-policy.json" | Out-Null
+        --policy-document "file://C:\Temp\alb-policy.json"
 
     Write-Host "  Created" -ForegroundColor Green
 } else {
     Write-Host "  Already exists" -ForegroundColor Green
 }
 
-# [2/4] IRSA Trust Role
+# ── [2/4] IRSA Trust Role ─────────────────────────────────────────────────
 Write-Host "[2/4] IRSA role..." -ForegroundColor Yellow
+
 $OIDC = (aws eks describe-cluster `
     --name $CLUSTER_NAME `
     --region $AWS_REGION `
@@ -704,30 +709,37 @@ $trust = @"
   }]
 }
 "@
-$trust | Set-Content "$env:TEMP\alb-trust.json"
 
-$rc = aws iam get-role --role-name $ROLE_NAME 2>&1
+# Windows fix: write to C:\Temp and use file://C:\path format
+[System.IO.File]::WriteAllText("C:\Temp\alb-trust.json", $trust)
+
+$roleCheck = aws iam get-role --role-name $ROLE_NAME 2>&1
 if ($LASTEXITCODE -ne 0) {
     aws iam create-role `
         --role-name $ROLE_NAME `
-        --assume-role-policy-document "file:///$env:TEMP\alb-trust.json" | Out-Null
+        --assume-role-policy-document "file://C:\Temp\alb-trust.json"
+
     aws iam attach-role-policy `
         --role-name $ROLE_NAME `
-        --policy-arn "arn:aws:iam::${ACCOUNT_ID}:policy/$POLICY_NAME" | Out-Null
+        --policy-arn "arn:aws:iam::${ACCOUNT_ID}:policy/$POLICY_NAME"
+
     Write-Host "  Created" -ForegroundColor Green
 } else {
     Write-Host "  Already exists" -ForegroundColor Green
 }
 
-# [3/4] Get VPC ID
+# ── [3/4] Get VPC ID ──────────────────────────────────────────────────────
 $VPC_ID = aws eks describe-cluster `
-    --name $CLUSTER_NAME --region $AWS_REGION `
-    --query "cluster.resourcesVpcConfig.vpcId" --output text
+    --name $CLUSTER_NAME `
+    --region $AWS_REGION `
+    --query "cluster.resourcesVpcConfig.vpcId" `
+    --output text
 
 $ROLE_ARN = "arn:aws:iam::${ACCOUNT_ID}:role/$ROLE_NAME"
 
-# [4/4] Helm install
+# ── [4/4] Helm install ────────────────────────────────────────────────────
 Write-Host "[4/4] Helm install..." -ForegroundColor Yellow
+
 helm repo add eks https://aws.github.io/eks-charts 2>$null
 helm repo update | Out-Null
 
@@ -744,7 +756,10 @@ helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-contro
 Write-Host ""
 kubectl get deployment aws-load-balancer-controller -n kube-system
 Write-Host "ALB Controller ready." -ForegroundColor Green
-```
+
+# Cleanup
+Remove-Item "C:\Temp\alb-policy.json" -Force -ErrorAction SilentlyContinue
+Remove-Item "C:\Temp\alb-trust.json"  -Force -ErrorAction SilentlyContinue
 
 ---
 

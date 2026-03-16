@@ -11,7 +11,7 @@ metadata:
     environment: dev
 data:
   # These are injected as environment variables into pods
-  DB_HOST: "mnc-app-dev-mysql.xxxxxxxxxx.ap-south-1.rds.amazonaws.com"   # Replace with actual RDS endpoint (Terraform output)
+  DB_HOST: "mnc-app-dev-mysql.cj2s8y0gk4zy.ap-south-1.rds.amazonaws.com"   # Replace with actual RDS endpoint (Terraform output)
   DB_NAME: "mnc_app_dev"
   DB_USERNAME: "appuser"
   SPRING_PROFILES_ACTIVE: "dev"
