@@ -3,7 +3,7 @@ variable "environment"         { type = string }
 variable "cluster_name"        { type = string }
 variable "kubernetes_version"  {
   type    = string
-  default = "1.29"
+  default = "1.35"
 }
 variable "vpc_id"              { type = string }
 variable "public_subnet_ids"   { type = list(string) }
@@ -11,7 +11,6 @@ variable "private_subnet_ids"  { type = list(string) }
 variable "jenkins_sg_id"       { type = string }
 variable "alb_sg_id"           { type = string }
 variable "ec2_key_name"        { type = string }
-
 # ── NEW: Jenkins IAM role ARN ─────────────────────────────────────────────
 # Required so the aws-auth ConfigMap can grant Jenkins kubectl access.
 # Passed from infra/main.tf as module.jenkins.jenkins_role_arn.

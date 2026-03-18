@@ -14,7 +14,7 @@ allowed_cidr_blocks = ["122.164.81.39/32"]
 jenkins_ami_id        = "ami-0e267a9919cdf778f"
 jenkins_instance_type = "t3.large"
 
-kubernetes_version  = "1.29"
+kubernetes_version  = "1.35"
 node_instance_types = ["t3.medium"]
 capacity_type       = "SPOT"           # Staging can still use SPOT
 desired_nodes       = 2

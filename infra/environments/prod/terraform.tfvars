@@ -14,7 +14,7 @@ allowed_cidr_blocks = ["122.164.81.39/32"]
 jenkins_ami_id        = "ami-0e267a9919cdf778f"
 jenkins_instance_type = "t3.large"
 
-kubernetes_version  = "1.29"
+kubernetes_version  = "1.35"
 node_instance_types = ["t3.large"]    # Bigger nodes for prod workloads
 capacity_type       = "ON_DEMAND"     # NEVER use SPOT for prod — unpredictable termination
 desired_nodes       = 3               # 3 nodes for availability across 2 AZs

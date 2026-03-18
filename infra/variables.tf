@@ -22,7 +22,7 @@ variable "jenkins_instance_type" {
 variable "allowed_cidr_blocks"   { type = list(string) }
 variable "kubernetes_version"    { 
     type = string 
-    default = "1.29" 
+    default = "1.35" 
 }
 variable "node_instance_types"   { type = list(string) }
 variable "capacity_type"         { 

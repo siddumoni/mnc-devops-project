@@ -32,7 +32,7 @@ jenkins_ami_id       = "ami-0e267a9919cdf778f"  # Amazon Linux 2023 — ap-south
 jenkins_instance_type = "t3.large"              # 2 vCPU, 8 GB — sufficient for dev builds
 
 # EKS
-kubernetes_version  = "1.29"
+kubernetes_version  = "1.35"
 node_instance_types = ["t3.medium"]             # Dev: smaller nodes, lower cost
 capacity_type       = "SPOT"                    # Dev uses SPOT instances to save ~70% cost
 desired_nodes       = 2
