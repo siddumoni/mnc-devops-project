@@ -233,6 +233,14 @@ resource "aws_security_group" "jenkins_alb" {
     description = "HTTP (redirect to HTTPS)"
   }
 
+  ingress {
+  from_port   = 8080
+  to_port     = 8080
+  protocol    = "tcp"
+  cidr_blocks = [var.vpc_cidr]
+  description = "Jenkins UI access from ALB within VPC"
+}
+
   egress {
     from_port   = 8080
     to_port     = 8080
