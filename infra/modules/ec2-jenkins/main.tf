@@ -122,6 +122,14 @@ resource "aws_security_group" "jenkins" {
     description = "Jenkins UI access"
   }
 
+  ingress {
+    from_port   = 8080
+    to_port     = 8080
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
+    description = "Jenkins UI access from ALB within VPC"
+  }
+
   # SSH — only from within VPC (e.g. bastion host)
   ingress {
     from_port   = 22
