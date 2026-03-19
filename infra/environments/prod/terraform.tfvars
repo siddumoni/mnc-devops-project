@@ -9,7 +9,7 @@ private_subnet_cidrs = ["10.30.10.0/24", "10.30.11.0/24"]
 availability_zones   = ["ap-south-1a", "ap-south-1b"]
 
 ec2_key_name        = "mnc-app-keypair"
-allowed_cidr_blocks = ["122.164.81.39/32"]
+allowed_cidr_blocks = ["122.164.86.25/32"]
 
 jenkins_ami_id        = "ami-0e267a9919cdf778f"
 jenkins_instance_type = "t3.large"
