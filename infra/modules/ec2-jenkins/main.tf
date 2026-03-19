@@ -237,8 +237,8 @@ resource "aws_security_group" "jenkins_alb" {
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]    # ← change from var.allowed_cidr_blocks to 0.0.0.0/0
-    description = "HTTP from anywhere (lab only)"
+    cidr_blocks = var.allowed_cidr_blocks
+    description = "HTTP (redirect to HTTPS)"
   }
 
   ingress {
