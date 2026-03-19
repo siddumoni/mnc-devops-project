@@ -13,7 +13,7 @@ exec > >(tee /var/log/jenkins-setup.log) 2>&1
 
 echo "=== [1/8] System update ==="
 dnf update -y
-dnf install -y git curl wget unzip jq
+dnf install -y git wget unzip jq
 
 # ─────────────────────────────────────────────
 # Java 17 (Jenkins and Maven both need it)
