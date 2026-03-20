@@ -196,6 +196,9 @@ Read this section first. It explains every major event in order so nothing surpr
 ║  └─────────────────────────────────────────────────────────────────────────┘    ║
 ╚══════════════════════════════════════════════════════════════════════════════════╝
 ```
+### Terraform Module Structure
+
+![Terraform Code Structure](docs/terraform_structure.svg)
 
 ### Security Groups — What talks to what
 
