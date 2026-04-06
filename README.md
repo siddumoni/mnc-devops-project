@@ -1509,10 +1509,9 @@ kubectl top nodes
 # will orphan in AWS and block terraform destroy)
 kubectl delete -f k8s\dev\namespace.yaml   # this cascades and deletes everything in the namespace
 
+# Delete all the resources except Jenkins, VPC and  EBS to preserve jenkins config
 Set-Location "infra\environments\dev"
-terraform destroy `
-    -var-file="terraform.tfvars" `
-    -var="db_password=DevPass123!"
+terraform destroy -target="module.dev.module.eks" -target="module.dev.module.rds" -target="module.dev.module.ecr[0]" -target="module.dev.aws_ssm_parameter.db_host" -target="module.dev.aws_ssm_parameter.db_name" -target="module.dev.aws_ssm_parameter.db_password" -target="module.dev.aws_ssm_parameter.ecr_registry" -target="module.dev.kubernetes_namespace.env" -var-file="terraform.tfvars" -var="db_password=DevPass123!"
 # Type 'yes' when prompted
 ```
 
