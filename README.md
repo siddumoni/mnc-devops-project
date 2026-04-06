@@ -608,14 +608,7 @@ Write-Host "Account ID: $AWS_ACCOUNT_ID"
 
 ## Step 2 — Configure Your Local Machine
 
-### 2.1 Find your public IP address
-
-```powershell
-$MY_IP = (Invoke-WebRequest -Uri "https://ifconfig.me" -UseBasicParsing).Content.Trim()
-Write-Host "Your public IP: $MY_IP"
-```
-
-### 2.2 Get the latest Amazon Linux 2023 AMI ID for ap-south-1
+### 2.1 Get the latest Amazon Linux 2023 AMI ID for ap-south-1
 
 ```powershell
 $AMI_ID = aws ec2 describe-images `
@@ -629,7 +622,7 @@ $AMI_ID = aws ec2 describe-images `
 Write-Host "Latest AMI ID: $AMI_ID"
 ```
 
-### 2.3 Create the SSH key directory
+### 2.2 Create the SSH key directory
 
 ```powershell
 $sshDir = "$env:USERPROFILE\.ssh"
@@ -659,7 +652,6 @@ Set-Location mnc-devops-project
 
 ```powershell
 $ACCOUNT_ID = (aws sts get-caller-identity --query Account --output text)
-$MY_IP      = (Invoke-RestMethod -Uri "https://ifconfig.me/ip").Trim()
 $AMI_ID     = aws ec2 describe-images `
                   --owners amazon `
                   --filters "Name=name,Values=al2023-ami-2023*-x86_64" `
@@ -669,7 +661,6 @@ $AMI_ID     = aws ec2 describe-images `
                   --region ap-south-1
 
 Write-Host "Account ID : $ACCOUNT_ID"
-Write-Host "My IP      : $MY_IP"
 Write-Host "AMI ID     : $AMI_ID"
 
 $files = @(
@@ -681,7 +672,6 @@ $files = @(
 foreach ($file in $files) {
     $content = Get-Content $file -Raw
     $content = $content -replace "123456789012",          $ACCOUNT_ID
-    $content = $content -replace "YOUR_OFFICE_IP",        "$MY_IP/32"
     $content = $content -replace "ami-0f58b397bc5c1f2e8", $AMI_ID
     $content = $content -replace "ami-0e267a9919cdf778f", $AMI_ID
     Set-Content -Path $file -Value $content -NoNewline

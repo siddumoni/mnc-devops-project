@@ -25,7 +25,7 @@ availability_zones   = ["ap-south-1a", "ap-south-1b"]
 
 # Access
 ec2_key_name        = "mnc-app-keypair"         # ← Create this key pair in EC2 console first
-allowed_cidr_blocks = ["122.164.85.165/32"]      # ← Replace with your actual IP
+allowed_cidr_blocks = ["0.0.0.0/0"]      # ← Replace with your actual IP
 
 # Jenkins
 jenkins_ami_id       = "ami-0fe1d8d9040df33e6"  # Amazon Linux 2023 — ap-south-1
