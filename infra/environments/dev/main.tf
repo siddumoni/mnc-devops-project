@@ -84,3 +84,4 @@ output "jenkins_alb_dns"        { value = module.dev.jenkins_alb_dns }
 output "sonarqube_url"          { value = module.dev.sonarqube_url }
 output "db_endpoint"            { value = module.dev.db_endpoint }
 output "ecr_repository_urls"    { value = module.dev.ecr_repository_urls }
+output "alb_controller_role_arn" { value = module.dev.alb_controller_role_arn }

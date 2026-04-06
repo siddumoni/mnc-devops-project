@@ -6,3 +6,7 @@ output "oidc_provider_arn"          { value = aws_iam_openid_connect_provider.cl
 output "oidc_provider_url"          { value = aws_iam_openid_connect_provider.cluster.url }
 output "node_group_role_arn"        { value = aws_iam_role.node_group.arn }
 output "node_security_group_id"     { value = aws_security_group.nodes.id }
+output "alb_controller_role_arn" {
+  description = "IRSA role ARN for the ALB controller Helm install"
+  value       = aws_iam_role.alb_controller.arn
+}

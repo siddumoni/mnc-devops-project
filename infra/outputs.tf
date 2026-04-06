@@ -8,3 +8,6 @@ output "db_endpoint"            { value = module.rds.db_endpoint }
 output "ecr_repository_urls" {
   value = var.create_ecr ? module.ecr[0].repository_urls : {}
 }
+output "alb_controller_role_arn" {
+  value = module.eks.alb_controller_role_arn
+}

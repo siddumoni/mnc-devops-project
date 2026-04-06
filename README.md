@@ -914,69 +914,20 @@ git push origin main
 Without this controller, applying `ingress.yaml` creates the Ingress resource in Kubernetes but no real AWS ALB is ever provisioned. The ALB Controller watches for Ingress resources and creates the AWS ALB automatically.
 
 ```powershell
-Set-Location "C:\Projects\mnc-devops-project"
+Set-Location "C:\Projects\mnc-devops-project\infra\environments\dev"
 
 $AWS_REGION   = "ap-south-1"
-$ACCOUNT_ID   = (aws sts get-caller-identity --query Account --output text)
 $CLUSTER_NAME = "mnc-app-dev-cluster"
-$POLICY_NAME  = "AWSLoadBalancerControllerIAMPolicy"
-$ROLE_NAME    = "mnc-app-dev-alb-controller-role"
 
-New-Item -ItemType Directory -Path "C:\Temp" -Force | Out-Null
+# Read the role ARN directly from terraform output — always correct
+$ROLE_ARN = terraform output -raw alb_controller_role_arn
 
-# [1/4] IAM Policy
-$policyCheck = aws iam get-policy `
-    --policy-arn "arn:aws:iam::${ACCOUNT_ID}:policy/$POLICY_NAME" 2>&1
-if ($LASTEXITCODE -ne 0) {
-    Invoke-WebRequest `
-        -Uri "https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/main/docs/install/iam_policy.json" `
-        -OutFile "C:\Temp\alb-policy.json" -UseBasicParsing
-    aws iam create-policy --policy-name $POLICY_NAME `
-        --policy-document "file://C:\Temp\alb-policy.json"
-    Write-Host "[1/4] IAM policy created" -ForegroundColor Green
-} else {
-    Write-Host "[1/4] IAM policy already exists" -ForegroundColor Green
-}
+$VPC_ID = aws eks describe-cluster `
+    --name $CLUSTER_NAME `
+    --region $AWS_REGION `
+    --query "cluster.resourcesVpcConfig.vpcId" `
+    --output text
 
-# [2/4] IRSA role
-$OIDC = (aws eks describe-cluster --name $CLUSTER_NAME --region $AWS_REGION `
-    --query "cluster.identity.oidc.issuer" --output text) -replace "https://", ""
-
-$trust = @"
-{
-  "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Principal": { "Federated": "arn:aws:iam::${ACCOUNT_ID}:oidc-provider/${OIDC}" },
-    "Action": "sts:AssumeRoleWithWebIdentity",
-    "Condition": {
-      "StringEquals": {
-        "${OIDC}:sub": "system:serviceaccount:kube-system:aws-load-balancer-controller",
-        "${OIDC}:aud": "sts.amazonaws.com"
-      }
-    }
-  }]
-}
-"@
-[System.IO.File]::WriteAllText("C:\Temp\alb-trust.json", $trust)
-
-$roleCheck = aws iam get-role --role-name $ROLE_NAME 2>&1
-if ($LASTEXITCODE -ne 0) {
-    aws iam create-role --role-name $ROLE_NAME `
-        --assume-role-policy-document "file://C:\Temp\alb-trust.json"
-    aws iam attach-role-policy --role-name $ROLE_NAME `
-        --policy-arn "arn:aws:iam::${ACCOUNT_ID}:policy/$POLICY_NAME"
-    Write-Host "[2/4] IRSA role created" -ForegroundColor Green
-} else {
-    Write-Host "[2/4] IRSA role already exists" -ForegroundColor Green
-}
-
-# [3/4] Get VPC ID
-$VPC_ID = aws eks describe-cluster --name $CLUSTER_NAME --region $AWS_REGION `
-    --query "cluster.resourcesVpcConfig.vpcId" --output text
-$ROLE_ARN = "arn:aws:iam::${ACCOUNT_ID}:role/$ROLE_NAME"
-
-# [4/4] Helm install
 helm repo add eks https://aws.github.io/eks-charts 2>$null
 helm repo update | Out-Null
 
@@ -991,10 +942,7 @@ helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-contro
     --wait
 
 kubectl get deployment aws-load-balancer-controller -n kube-system
-Write-Host "[4/4] ALB Controller ready" -ForegroundColor Green
-
-Remove-Item "C:\Temp\alb-policy.json" -Force -ErrorAction SilentlyContinue
-Remove-Item "C:\Temp\alb-trust.json"  -Force -ErrorAction SilentlyContinue
+Write-Host "ALB Controller ready" -ForegroundColor Green
 ```
 
 ---
