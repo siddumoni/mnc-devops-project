@@ -159,9 +159,6 @@ resource "aws_ebs_volume" "jenkins_home" {
   type              = "gp3"
   encrypted         = true  # Encrypt at rest — required for banking compliance
 
-  lifecycle {
-    prevent_destroy = true
-  }
   tags = merge(var.tags, {
     Name = "${var.project_name}-jenkins-home"
   })
@@ -181,10 +178,6 @@ resource "aws_instance" "jenkins" {
   subnet_id              = var.private_subnet_id  # Jenkins lives in private subnet
   vpc_security_group_ids = [aws_security_group.jenkins.id]
   iam_instance_profile   = aws_iam_instance_profile.jenkins.name
-
-  lifecycle {
-      prevent_destroy = true
-    }
 
   root_block_device {
     volume_size           = 30
