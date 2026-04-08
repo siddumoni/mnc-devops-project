@@ -39,7 +39,7 @@ Read this section first. It explains every major event in order so nothing surpr
 1. You create a dedicated IAM user `terraform-admin` in AWS console with AdministratorAccess. You never use root.
 2. You configure AWS CLI with those credentials and set the default region to `ap-south-1`.
 3. You install five tools: AWS CLI, Terraform, kubectl, Helm, Git — all via winget.
-4. You clone the repo to `C:\Projects\mnc-devops-project`.
+4. You clone the repo to `C:\Users\Siddu7\OneDrive\DevOps\Projects\mnc-devops-project`.
 5. You run a PowerShell block that auto-detects your AWS account ID, your public IP, and the latest Amazon Linux 2023 AMI ID, then patches all three `terraform.tfvars` files with those real values.
 
 ### Phase 2 — Bootstrap remote state (Step 4)
@@ -641,8 +641,8 @@ if (-not (Test-Path $sshDir)) {
 ### 3.1 Clone
 
 ```powershell
-New-Item -ItemType Directory -Path "C:\Projects" -Force | Out-Null
-Set-Location "C:\Projects"
+New-Item -ItemType Directory -Path "C:\Users\Siddu7\OneDrive\DevOps\Projects" -Force | Out-Null
+Set-Location "C:\Users\Siddu7\OneDrive\DevOps\Projects"
 
 git clone https://github.com/YOUR_USERNAME/mnc-devops-project.git
 Set-Location mnc-devops-project
@@ -800,7 +800,7 @@ Write-Host "Bootstrap complete." -ForegroundColor Cyan
 ### 5.1 Navigate to dev environment
 
 ```powershell
-Set-Location "C:\Projects\mnc-devops-project\infra\environments\dev"
+Set-Location "C:\Users\Siddu7\OneDrive\DevOps\Projects\mnc-devops-project\infra\environments\dev"
 ```
 
 ### 5.2 Initialise Terraform
@@ -892,7 +892,7 @@ ecr_repository_urls = {
 ### 5.7 Update the dev ConfigMap with the real RDS endpoint
 
 ```powershell
-Set-Location "C:\Projects\mnc-devops-project"
+Set-Location "C:\Users\Siddu7\OneDrive\DevOps\Projects\mnc-devops-project"
 
 $RDS_HOST = (terraform -chdir="infra\environments\dev" output -raw db_endpoint) -replace ":3306", ""
 
@@ -914,7 +914,7 @@ git push origin main
 Without this controller, applying `ingress.yaml` creates the Ingress resource in Kubernetes but no real AWS ALB is ever provisioned. The ALB Controller watches for Ingress resources and creates the AWS ALB automatically.
 
 ```powershell
-Set-Location "C:\Projects\mnc-devops-project\infra\environments\dev"
+Set-Location "C:\Users\Siddu7\OneDrive\DevOps\Projects\mnc-devops-project\infra\environments\dev"
 
 $AWS_REGION   = "ap-south-1"
 $CLUSTER_NAME = "mnc-app-dev-cluster"
@@ -982,7 +982,7 @@ Write-Host "Secret injected into namespace '$ENV_NAME'" -ForegroundColor Green
 ### 7.2 Apply non-deployment manifests only
 
 ```powershell
-Set-Location "C:\Projects\mnc-devops-project"
+Set-Location "C:\Users\Siddu7\OneDrive\DevOps\Projects\mnc-devops-project"
 
 # Apply these files one by one — NOT kubectl apply -f k8s\dev\ (that includes deployment files)
 kubectl apply -f k8s\dev\namespace.yaml
@@ -1204,7 +1204,7 @@ In your GitHub repo: **Settings → Webhooks → Add webhook**
 ### 9.1 Trigger a dev build
 
 ```powershell
-Set-Location "C:\Projects\mnc-devops-project"
+Set-Location "C:\Users\Siddu7\OneDrive\DevOps\Projects\mnc-devops-project"
 git checkout develop
 
 Add-Content -Path "README.md" -Value "`n<!-- trigger: first pipeline run -->"
@@ -1320,7 +1320,7 @@ Jenkins pauses twice — Tech Lead approval then DevOps Manager approval. In the
 Same two-pass apply as dev.
 
 ```powershell
-Set-Location "C:\Projects\mnc-devops-project\infra\environments\staging"
+Set-Location "C:\Users\Siddu7\OneDrive\DevOps\Projects\mnc-devops-project\infra\environments\staging"
 terraform init
 
 # Pass 1 — AWS infrastructure only
@@ -1351,7 +1351,7 @@ terraform apply `
 Update staging ConfigMap with real RDS endpoint:
 
 ```powershell
-Set-Location "C:\Projects\mnc-devops-project"
+Set-Location "C:\Users\Siddu7\OneDrive\DevOps\Projects\mnc-devops-project"
 
 $S_RDS = (terraform -chdir="infra\environments\staging" output -raw db_endpoint) `
     -replace ":3306", ""
@@ -1393,7 +1393,7 @@ Pods come up when Jenkins deploys to staging via the `release/*` branch pipeline
 ### 10.2 Prod infrastructure
 
 ```powershell
-Set-Location "C:\Projects\mnc-devops-project\infra\environments\prod"
+Set-Location "C:\Users\Siddu7\OneDrive\DevOps\Projects\mnc-devops-project\infra\environments\prod"
 terraform init
 
 # Pass 1
@@ -1423,7 +1423,7 @@ terraform apply `
 Update prod ConfigMap and edit the ingress with your real domain + ACM cert:
 
 ```powershell
-Set-Location "C:\Projects\mnc-devops-project"
+Set-Location "C:\Users\Siddu7\OneDrive\DevOps\Projects\mnc-devops-project"
 
 $P_RDS = (terraform -chdir="infra\environments\prod" output -raw db_endpoint) `
     -replace ":3306", ""
@@ -1519,7 +1519,7 @@ terraform destroy -target="module.dev.module.eks" -target="module.dev.module.rds
 
 ```powershell
 # Step 1: Two-pass apply (same as Step 5)
-Set-Location "C:\Projects\mnc-devops-project\infra\environments\dev"
+Set-Location "C:\Users\Siddu7\OneDrive\DevOps\Projects\mnc-devops-project\infra\environments\dev"
 
 # Pass 1
 terraform apply `
@@ -1545,7 +1545,7 @@ terraform apply -var-file="terraform.tfvars" -var="db_password=DevPass123!"
 # Step 2: Re-install ALB controller (re-run Step 6)
 # Step 3: Apply non-deployment manifests (re-run Step 7)
 
-Set-Location "C:\Projects\mnc-devops-project"
+Set-Location "C:\Users\Siddu7\OneDrive\DevOps\Projects\mnc-devops-project"
 $DB = aws ssm get-parameter --name "/mnc-app/dev/db/password" `
     --with-decryption --query "Parameter.Value" --output text --region ap-south-1
 kubectl create secret generic app-db-secret "--from-literal=DB_PASSWORD=$DB" `
